@@ -1,0 +1,198 @@
+rules_version = '2';
+
+// Buxoro POS — RBAC Security Rules (BACKEND-TAYYORGARLIK.md §3, §9, §12).
+// Multi-tenant: owners/{uid}, cafes/{cafeId}, cafes/{cafeId}/{employees,...}.
+// Rollar (§3): Владелец, Управляющий, Администратор зала, Официант, Повар, Маркетолог.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Yordamchi funksiyalar ──
+    function signedIn() {
+      return request.auth != null;
+    }
+    function cafeDoc(cafeId) {
+      return get(/databases/$(database)/documents/cafes/$(cafeId)).data;
+    }
+    function isOwner(cafeId) {
+      return signedIn() && cafeDoc(cafeId).ownerUid == request.auth.uid;
+    }
+    function isMember(cafeId) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/cafes/$(cafeId)/employees/$(request.auth.uid));
+    }
+    function role(cafeId) {
+      return get(/databases/$(database)/documents/cafes/$(cafeId)/employees/$(request.auth.uid)).data.role;
+    }
+    function hasRole(cafeId, roles) {
+      return isMember(cafeId) && (role(cafeId) in roles);
+    }
+    // Modul-darajali yozuv huquqlari (§3 rolePermissions).
+    function canManage(cafeId) { // owner + Управляющий (deyarli 'all')
+      return isOwner(cafeId) || hasRole(cafeId, ['Управляющий']);
+    }
+    function canMenu(cafeId) {    // menu: owner, manager, Повар
+      return canManage(cafeId) || hasRole(cafeId, ['Повар']);
+    }
+    function canStock(cafeId) {   // sklad: owner, manager, Повар, Администратор зала
+      return canManage(cafeId) || hasRole(cafeId, ['Повар', 'Администратор зала']);
+    }
+    function canSell(cafeId) {    // kassa/receipts: owner, manager, hallAdmin, Официант
+      return canManage(cafeId) || hasRole(cafeId, ['Администратор зала', 'Официант']);
+    }
+    function canFinance(cafeId) { // finance: owner, manager
+      return canManage(cafeId);
+    }
+    function canMarket(cafeId) {  // marketing/clients: owner, manager, Маркетолог, Официант
+      return canManage(cafeId) || hasRole(cafeId, ['Маркетолог', 'Официант']);
+    }
+
+    // ── owners ──
+    match /owners/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ── Collection-group: xodim o'z hujjatini uid bo'yicha topadi (login) ──
+    // resolveContext: collectionGroup('employees').where('uid','==',uid)
+    match /{path=**}/employees/{empId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // ── «Код заведения» → cafeId (xodim kirishi) ──
+    // O'qish ochiq: kod auth'dan OLDIN kerak (sintetik email yasash uchun);
+    // kod faqat cafeId'ga ishora qiladi, ma'lumotga kirish bermaydi.
+    match /cafeCodes/{code} {
+      allow read: if true;
+      allow create, update: if signedIn() &&
+        get(/databases/$(database)/documents/cafes/$(request.resource.data.cafeId)).data.ownerUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // ── cafes ──
+    match /cafes/{cafeId} {
+      // MUHIM: query (where ownerUid==uid) uchun resource.data orqali tekshiriladi —
+      // get()-ga asoslangan isOwner() list-so'rovlarda isbotlanmaydi (PERMISSION_DENIED edi).
+      allow read: if signedIn() &&
+        (resource.data.ownerUid == request.auth.uid || isMember(cafeId));
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      // Konfiguratsiyani owner/manager yangilaydi; o'chirish faqat owner.
+      allow update: if canManage(cafeId);
+      allow delete: if isOwner(cafeId);
+
+      // ── employees ──
+      match /employees/{empId} {
+        allow read: if isMember(cafeId) || isOwner(cafeId);
+        // Xodim yaratish/o'chirish/rol — Cloud Function (Admin SDK) orqali.
+        // Bu yerda: owner/manager to'g'ridan-to'g'ri yozishi mumkin (zaxira yo'l).
+        allow create, delete: if canManage(cafeId);
+        // Owner/manager to'liq; xodim faqat o'z hujjatini cheklangan yangilaydi.
+        allow update: if canManage(cafeId)
+          || (request.auth.uid == empId
+              && request.resource.data.role == resource.data.role
+              && request.resource.data.active == resource.data.active);
+      }
+
+      // ── Menyu (menu) ──
+      match /categories/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canMenu(cafeId);
+      }
+      match /products/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canMenu(cafeId);
+      }
+
+      // ── Ombor (sklad) ──
+      match /ingredients/{id} {
+        allow read: if isMember(cafeId);
+        // Sotuvda qoldiq kamayadi → sotuvchi ham yozadi; boshqacha — sklad huquqi.
+        allow write: if canStock(cafeId) || canSell(cafeId);
+      }
+      match /suppliers/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canStock(cafeId);
+      }
+      match /supplies/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canStock(cafeId);
+      }
+      match /storages/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canStock(cafeId);
+      }
+      match /wastes/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canStock(cafeId);
+      }
+      match /inventories/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canStock(cafeId);
+      }
+      match /processings/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canStock(cafeId);
+      }
+
+      // ── Moliya (finance) ──
+      match /accounts/{id} {
+        allow read: if isMember(cafeId);
+        // Balans sotuvda ham o'zgaradi (kassa yashigi) → canSell ham.
+        allow write: if canFinance(cafeId) || canSell(cafeId);
+      }
+      match /transactions/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canFinance(cafeId);
+      }
+
+      // ── Marketing / mijozlar ──
+      match /clients/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canMarket(cafeId);
+      }
+      match /clientGroups/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canManage(cafeId) || hasRole(cafeId, ['Маркетолог']);
+      }
+      match /promotions/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canManage(cafeId) || hasRole(cafeId, ['Маркетолог']);
+      }
+
+      // ── Kassa: cheklar ──
+      match /receipts/{id} {
+        allow read: if isMember(cafeId);
+        allow create: if canSell(cafeId);
+        // Vozvrat/tahrir — sotuvchi yoki menejer.
+        allow update: if canSell(cafeId);
+        allow delete: if canManage(cafeId);
+      }
+
+      // ── Kassa: smenalar (Кассовая смена / Z-отчёт) ──
+      // Sotuvchi smenani ochadi/yopadi va har chekda ko'rsatkichlarni oshiradi.
+      match /shifts/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canSell(cafeId) || canManage(cafeId);
+      }
+
+      // ── Zallar / stollar ──
+      match /halls/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canManage(cafeId);
+      }
+      match /tables/{id} {
+        allow read: if isMember(cafeId);
+        allow write: if canManage(cafeId) || canSell(cafeId);
+      }
+
+      // ── Statistika (Cloud Function yozadi; mijoz o'qiydi) ──
+      match /stats/{date} {
+        allow read: if isMember(cafeId);
+        allow write: if false; // faqat Admin SDK (Cloud Function)
+      }
+
+      // Boshqa kutilmagan subkolleksiya — rad etiladi.
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+  }
+}

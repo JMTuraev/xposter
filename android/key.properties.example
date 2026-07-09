@@ -1,0 +1,11 @@
+# NAMUNA. Bu faylni `key.properties` nomi bilan nusxalang va to'ldiring.
+# Haqiqiy `key.properties` va `.jks` fayl .gitignore da — hech qachon commit qilinmaydi.
+#
+# Keystore yaratish:
+#   keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA \
+#           -keysize 2048 -validity 10000 -alias upload
+#
+storePassword=YOUR_STORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=upload
+storeFile=C:/path/to/upload-keystore.jks

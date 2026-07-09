@@ -1,0 +1,136 @@
+# =============================================================
+#  Xposter / Buxoro POS — Flutter Android
+#  Qoida: MAXFIY hech narsa repoga tushmasin.
+# =============================================================
+
+# -------------------------------------------------------------
+# 1) MAXFIY — HECH QACHON COMMIT QILINMAYDI
+# -------------------------------------------------------------
+# Android release signing
+android/key.properties
+key.properties
+**/*.jks
+**/*.keystore
+upload-keystore.jks
+KEYSTORE-INFO.txt
+*keystore*info*.txt
+
+# Firebase / Google client konfiguratsiyasi (o'rniga *.example bor)
+**/google-services.json
+**/GoogleService-Info.plist
+lib/firebase_options.dart
+.firebaserc
+
+# Service account / admin kalitlar
+**/serviceAccount*.json
+**/*service-account*.json
+**/*-adminsdk-*.json
+
+# Muhit o'zgaruvchilari va sertifikatlar
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.p8
+*.pfx
+*.cer
+secrets.*
+*.secret
+
+# Mashinaga bog'liq yo'llar
+android/local.properties
+local.properties
+ios/Flutter/flutter_export_environment.sh
+
+# -------------------------------------------------------------
+# 2) BUILD ARTEFAKTLARI
+# -------------------------------------------------------------
+/build/
+**/build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+.pub-cache/
+/coverage/
+migrate_working_dir/
+*.class
+**/ios/Flutter/.last_build_id
+
+# Android
+android/.gradle/
+android/.kotlin/
+android/captures/
+android/gradlew
+android/gradlew.bat
+android/gradle/wrapper/gradle-wrapper.jar
+**/GeneratedPluginRegistrant.java
+.cxx/
+/android/app/debug
+/android/app/profile
+/android/app/release
+*.apk
+*.aab
+*.aar
+
+# Symbolication / obfuscation
+app.*.symbols
+app.*.map.json
+**/doc/api/
+
+# -------------------------------------------------------------
+# 3) FIREBASE / NODE
+# -------------------------------------------------------------
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+node_modules/
+functions/node_modules/
+npm-debug.log*
+
+# -------------------------------------------------------------
+# 4) IDE / OS
+# -------------------------------------------------------------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+!.vscode/extensions.json
+.history
+.atom/
+.svn/
+.swiftpm/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -------------------------------------------------------------
+# 5) YORDAMCHI / VAQTINCHALIK FAYLLAR (bridge, log, skrinshot)
+# -------------------------------------------------------------
+_*.bat
+_*.txt
+_*.png
+_*.log
+_tmp/
+errlog.txt
+*.log
+*.swp
+*.pyc
+__pycache__/
+
+# Qurilmadan olingan debug skrinshotlari
+screen.png
+screen_*.png
+phone_*.png
+
+# Vaqtinchalik dev skriptlari
+dumplog.bat
+logcat.bat
+no_lock.bat
+phone_screenshot.bat
+install_apk.bat

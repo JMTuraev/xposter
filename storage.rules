@@ -1,0 +1,29 @@
+rules_version = '2';
+
+// Buxoro POS — Storage rules (BACKEND-TAYYORGARLIK.md §7).
+// Mahsulot rasmlari: cafes/{cafeId}/products/... yo'lida saqlanadi.
+//
+// Joriy (deploy qilingan): auth + rasm turi + hajm cheklovi.
+// Kuchliroq per-kafe izolatsiya uchun quyidagi (izohli) variantdan foydalaning —
+// u Firestore'ga cross-service so'rov qiladi va Storage service-account'ga
+// qo'shimcha IAM roli (Firestore viewer) kerak (konsol "Attach permissions").
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /cafes/{cafeId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+
+      // ── Kuchliroq (cross-service, IAM roli kerak) ──
+      // function isMember(cafeId) {
+      //   return request.auth != null &&
+      //     firestore.exists(/databases/(default)/documents/cafes/$(cafeId)/employees/$(request.auth.uid));
+      // }
+      // allow read: if isMember(cafeId);
+      // allow write: if isMember(cafeId)
+      //   && request.resource.size < 5 * 1024 * 1024
+      //   && request.resource.contentType.matches('image/.*');
+    }
+  }
+}

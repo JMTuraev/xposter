@@ -1,0 +1,161 @@
+{
+  "company": {
+    "name": "Чайхана «Бухоро»",
+    "spot": "Чайхана «Бухоро» — Центр",
+    "address": "г. Бухара, ул. Ляби-Хауз, 12",
+    "currency": "СУМ",
+    "timezone": "Asia/Samarkand",
+    "trialEndsAt": "2026-07-09",
+    "accountId": 567053
+  },
+  "categories": [
+    {"id": 1, "name": "Основные блюда", "color": "#D97757"},
+    {"id": 2, "name": "Шашлыки", "color": "#BF4D43"},
+    {"id": 3, "name": "Салаты", "color": "#788C5D"},
+    {"id": 4, "name": "Выпечка", "color": "#C9944A"},
+    {"id": 5, "name": "Горячие напитки", "color": "#8B6F4E"},
+    {"id": 6, "name": "Холодные напитки", "color": "#5B8DEF"}
+  ],
+  "products": [
+    {"id": 1, "name": "Плов чайханский", "categoryId": 1, "type": "dish", "workshop": "Кухня", "price": 35000, "cost": 15080, "photo": "🍚"},
+    {"id": 2, "name": "Лагман уйгурский", "categoryId": 1, "type": "dish", "workshop": "Кухня", "price": 30000, "cost": 11200, "photo": "🍜"},
+    {"id": 3, "name": "Шурпа", "categoryId": 1, "type": "dish", "workshop": "Кухня", "price": 28000, "cost": 10500, "photo": "🍲"},
+    {"id": 4, "name": "Манты с говядиной (4 шт)", "categoryId": 1, "type": "dish", "workshop": "Кухня", "price": 25000, "cost": 9800, "photo": "🥟"},
+    {"id": 5, "name": "Шашлык из говядины", "categoryId": 2, "type": "dish", "workshop": "Кухня", "price": 25000, "cost": 12400, "photo": "🍢"},
+    {"id": 6, "name": "Шашлык куриный", "categoryId": 2, "type": "dish", "workshop": "Кухня", "price": 20000, "cost": 8600, "photo": "🍗"},
+    {"id": 7, "name": "Салат Ачичук", "categoryId": 3, "type": "dish", "workshop": "Кухня", "price": 12000, "cost": 3900, "photo": "🥗"},
+    {"id": 8, "name": "Салат «Ташкент»", "categoryId": 3, "type": "dish", "workshop": "Кухня", "price": 18000, "cost": 7100, "photo": "🥙"},
+    {"id": 9, "name": "Лепёшка тандырная", "categoryId": 4, "type": "product", "workshop": null, "price": 4000, "cost": 2000, "photo": "🫓"},
+    {"id": 10, "name": "Самса с мясом", "categoryId": 4, "type": "dish", "workshop": "Кухня", "price": 8000, "cost": 3400, "photo": "🥧"},
+    {"id": 11, "name": "Чай чёрный (чайник)", "categoryId": 5, "type": "dish", "workshop": "Бар", "price": 5000, "cost": 900, "photo": "🫖"},
+    {"id": 12, "name": "Чай зелёный (чайник)", "categoryId": 5, "type": "dish", "workshop": "Бар", "price": 5000, "cost": 900, "photo": "🍵"},
+    {"id": 13, "name": "Кофе американо", "categoryId": 5, "type": "dish", "workshop": "Бар", "price": 15000, "cost": 4200, "photo": "☕"},
+    {"id": 14, "name": "Кока-Кола 0,5 л", "categoryId": 6, "type": "product", "workshop": null, "price": 10000, "cost": 5000, "photo": "🥤", "modifications": null},
+    {"id": 15, "name": "Вода минеральная 0,5 л", "categoryId": 6, "type": "product", "workshop": null, "price": 6000, "cost": 2800, "photo": "💧", "modifications": [{"name": "Газированная"}, {"name": "Без газа"}]}
+  ],
+  "techCard_example": {
+    "productId": 1,
+    "composition": [
+      {"ingredientId": 1, "brutto": 150, "netto": 150, "unit": "г", "cost": 2700},
+      {"ingredientId": 3, "brutto": 120, "netto": 120, "unit": "г", "cost": 10800},
+      {"ingredientId": 2, "brutto": 100, "netto": 100, "unit": "г", "cost": 500},
+      {"ingredientId": 4, "brutto": 50, "netto": 50, "unit": "г", "cost": 200},
+      {"ingredientId": 5, "brutto": 40, "netto": 40, "unit": "мл", "cost": 880}
+    ],
+    "output": "460 г",
+    "totalCost": 15080,
+    "process": "Обжарить мясо и лук, добавить морковь, залить водой, засыпать рис. Готовить 40 минут.",
+    "cookingTime": "40 мин"
+  },
+  "ingredients": [
+    {"id": 1, "name": "Рис лазер", "unit": "кг", "stock": 19.7, "costPerUnit": 18000, "limit": 5},
+    {"id": 2, "name": "Морковь жёлтая", "unit": "кг", "stock": 14.8, "costPerUnit": 5000, "limit": 3},
+    {"id": 3, "name": "Говядина", "unit": "кг", "stock": 19.76, "costPerUnit": 90000, "limit": 5},
+    {"id": 4, "name": "Лук репчатый", "unit": "кг", "stock": 9.9, "costPerUnit": 4000, "limit": 2},
+    {"id": 5, "name": "Масло растительное", "unit": "л", "stock": 9.96, "costPerUnit": 22000, "limit": 2},
+    {"id": 6, "name": "Чай чёрный (сухой)", "unit": "кг", "stock": 1.98, "costPerUnit": 80000, "limit": 0.5},
+    {"id": 7, "name": "Мука", "unit": "кг", "stock": 2.4, "costPerUnit": 6500, "limit": 5, "lowStock": true},
+    {"id": 8, "name": "Баранина", "unit": "кг", "stock": 8.2, "costPerUnit": 95000, "limit": 3},
+    {"id": 9, "name": "Помидоры", "unit": "кг", "stock": 6.5, "costPerUnit": 9000, "limit": 2},
+    {"id": 10, "name": "Огурцы", "unit": "кг", "stock": 4.1, "costPerUnit": 7000, "limit": 2},
+    {"id": 11, "name": "Картофель", "unit": "кг", "stock": 18.0, "costPerUnit": 4500, "limit": 5},
+    {"id": 12, "name": "Кока-Кола 0,5 (бут)", "unit": "шт", "stock": 46, "costPerUnit": 5000, "limit": 12},
+    {"id": 13, "name": "Кофе зерновой", "unit": "кг", "stock": 1.2, "costPerUnit": 160000, "limit": 0.5},
+    {"id": 14, "name": "Сахар", "unit": "кг", "stock": 7.9, "costPerUnit": 12000, "limit": 2},
+    {"id": 15, "name": "Лапша для лагмана", "unit": "кг", "stock": 5.6, "costPerUnit": 15000, "limit": 2}
+  ],
+  "storages": [{"id": 1, "name": "Склад 1 (кухня)", "sum": 2625053}, {"id": 2, "name": "Склад бара", "sum": 486000}],
+  "suppliers": [
+    {"id": 1, "name": "Ризо-Опт", "phone": "+998 91 400-11-22", "suppliesCount": 12, "suppliesSum": 8400000, "debt": 1200000},
+    {"id": 2, "name": "Мясной двор Бухара", "phone": "+998 93 505-77-88", "suppliesCount": 8, "suppliesSum": 14500000, "debt": 0},
+    {"id": 3, "name": "Фермер Хамид", "phone": "+998 90 712-33-44", "suppliesCount": 5, "suppliesSum": 2100000, "debt": 350000}
+  ],
+  "employees": [
+    {"id": 1, "name": "Жафар Алитураев", "role": "Владелец", "pin": "0000", "phone": "+998 99 703-44-44", "login": "tnapster@mail.ru", "lastLogin": "сегодня, 09:12"},
+    {"id": 2, "name": "Азиз Тошев", "role": "Официант", "pin": "1111", "phone": "+998 90 123-45-67", "revenue": 1250000, "checks": 32},
+    {"id": 3, "name": "Малика Юсупова", "role": "Официант", "pin": "2222", "phone": "+998 91 234-56-78", "revenue": 980000, "checks": 27},
+    {"id": 4, "name": "Бахтиёр Раимов", "role": "Повар", "pin": "3333", "phone": "+998 93 345-67-89"},
+    {"id": 5, "name": "Дилноза Салимова", "role": "Администратор зала", "pin": "4444", "phone": "+998 94 456-78-90"}
+  ],
+  "roles": ["Владелец", "Управляющий", "Администратор зала", "Официант", "Повар", "Маркетолог"],
+  "clientGroups": [
+    {"id": 1, "name": "Новые клиенты", "type": "скидочная", "percent": 0},
+    {"id": 2, "name": "Постоянные", "type": "скидочная", "percent": 5},
+    {"id": 3, "name": "VIP", "type": "бонусная", "percent": 10}
+  ],
+  "clients": [
+    {"id": 1, "name": "Азиз Каримов", "phone": "+998 90 123-45-67", "group": "Постоянные", "card": "1001", "totalSpent": 1840000, "birthday": "14.03.1992"},
+    {"id": 2, "name": "Нилуфар Рахимова", "phone": "+998 93 222-33-44", "group": "VIP", "card": "1002", "totalSpent": 5320000, "bonus": 240000},
+    {"id": 3, "name": "Odil Hamdamov", "phone": "+998 97 555-66-77", "group": "Новые клиенты", "card": "1003", "totalSpent": 96000},
+    {"id": 4, "name": "Гуля Исмаилова", "phone": "+998 88 111-22-33", "group": "Постоянные", "card": "1004", "totalSpent": 2210000},
+    {"id": 5, "name": "Тимур Носиров", "phone": "+998 95 999-88-77", "group": "VIP", "card": "1005", "totalSpent": 7150000, "bonus": 512000}
+  ],
+  "accounts": [
+    {"id": 1, "name": "Денежный ящик", "type": "Наличные", "balance": 1240000},
+    {"id": 2, "name": "Расчетный счет", "type": "Безналичный счет", "balance": 8360000},
+    {"id": 3, "name": "Сейф", "type": "Наличные", "balance": 5000000}
+  ],
+  "financeCategories": ["Аренда", "Зарплата", "Поставки", "Коммунальные платежи", "Маркетинг", "Хозяйственные расходы", "Банковские услуги и комиссии", "Кассовые смены", "Прочие доходы"],
+  "transactions": [
+    {"id": 1, "date": "04.07 10:15", "type": "расход", "category": "Аренда", "comment": "Аренда помещения за июль", "amount": -500000, "account": "Расчетный счет"},
+    {"id": 2, "date": "03.07 18:40", "type": "расход", "category": "Поставки", "comment": "Мясной двор, говядина 20 кг", "amount": -1800000, "account": "Сейф"},
+    {"id": 3, "date": "03.07 09:00", "type": "доход", "category": "Кассовые смены", "comment": "Инкассация смены №41", "amount": 2350000, "account": "Денежный ящик"},
+    {"id": 4, "date": "02.07 14:20", "type": "расход", "category": "Коммунальные платежи", "comment": "Электроэнергия июнь", "amount": -420000, "account": "Расчетный счет"},
+    {"id": 5, "date": "01.07 12:00", "type": "расход", "category": "Зарплата", "comment": "Аванс официантам", "amount": -1500000, "account": "Сейф"}
+  ],
+  "salesStats": {
+    "today": {"revenue": 2480000, "profit": 1315000, "checks": 38, "visitors": 52, "avgCheck": 65263, "growth": {"revenue": 12, "profit": 9, "checks": 5, "visitors": 8, "avgCheck": 4}},
+    "revenueByDay": [
+      {"date": "28.06", "revenue": 1850000}, {"date": "29.06", "revenue": 2100000},
+      {"date": "30.06", "revenue": 1720000}, {"date": "01.07", "revenue": 2350000},
+      {"date": "02.07", "revenue": 2620000}, {"date": "03.07", "revenue": 2940000},
+      {"date": "04.07", "revenue": 2480000}
+    ],
+    "byHour": [0,0,0,0,0,0,0,0,120000,280000,340000,420000,510000,380000,290000,240000,310000,350000,430000,390000,180000,90000,0,0],
+    "byWeekday": {"Пн": 1650000, "Вт": 1780000, "Ср": 1920000, "Чт": 2100000, "Пт": 2560000, "Сб": 3240000, "Вс": 2870000},
+    "paymentMethods": {"Наличные": 1490000, "Карточка": 940000, "Бонусы": 50000},
+    "topProducts": [
+      {"name": "Плов чайханский", "count": 14}, {"name": "Чай чёрный (чайник)", "count": 12},
+      {"name": "Шашлык из говядины", "count": 9}, {"name": "Лепёшка тандырная", "count": 8},
+      {"name": "Салат Ачичук", "count": 6}
+    ],
+    "abc": [
+      {"name": "Плов чайханский", "salesPct": 24.1, "revenuePct": 28.3, "profitPct": 31.2, "group": "A"},
+      {"name": "Шашлык из говядины", "salesPct": 15.5, "revenuePct": 18.0, "profitPct": 16.4, "group": "A"},
+      {"name": "Лагман уйгурский", "salesPct": 12.9, "revenuePct": 14.2, "profitPct": 15.1, "group": "B"},
+      {"name": "Чай чёрный (чайник)", "salesPct": 20.7, "revenuePct": 4.8, "profitPct": 7.9, "group": "B"},
+      {"name": "Кока-Кола 0,5 л", "salesPct": 8.6, "revenuePct": 4.1, "profitPct": 3.2, "group": "C"}
+    ]
+  },
+  "openOrders": [
+    {"id": 12, "number": "№12", "type": "В заведении", "table": "Стол 3", "openMinutes": 6, "sum": 105000, "items": [{"name": "Плов чайханский", "qty": 2}, {"name": "Чай чёрный (чайник)", "qty": 1}, {"name": "Лепёшка тандырная", "qty": 2}]},
+    {"id": 13, "number": "№13", "type": "Навынос", "openMinutes": 2, "sum": 33000, "items": [{"name": "Самса с мясом", "qty": 3}, {"name": "Кока-Кола 0,5 л", "qty": 1}]}
+  ],
+  "receiptsArchive": [
+    {"id": 11, "time": "13:42", "waiter": "Азиз Тошев", "sum": 148000, "payment": "Наличными", "items": "Плов ×2, Шашлык гов. ×2, Чай чёрный, Лепёшка ×2", "profit": 78200, "status": "Закрыт"},
+    {"id": 10, "time": "13:15", "waiter": "Малика Юсупова", "sum": 63000, "payment": "Карточкой", "items": "Лагман, Салат Ачичук, Чай зелёный, Лепёшка", "profit": 34100, "status": "Закрыт"},
+    {"id": 9, "time": "12:48", "waiter": "Азиз Тошев", "sum": 25000, "payment": "Наличными", "items": "Манты (4 шт)", "profit": 15200, "status": "Закрыт"},
+    {"id": 8, "time": "12:20", "waiter": "Малика Юсупова", "sum": 200000, "payment": "Карточкой 150 000 + Наличными 50 000", "items": "Плов ×3, Шурпа ×2, Ачичук ×2, Чай ×2, Кола ×2", "profit": 104000, "status": "Закрыт"}
+  ],
+  "cashShifts": [
+    {"id": 42, "opened": "04.07 08:02", "closed": null, "startCash": 300000, "incasso": null, "inCash": 1790000, "diff": null, "status": "Открыта"},
+    {"id": 41, "opened": "03.07 08:05", "closed": "03.07 23:10", "startCash": 300000, "incasso": 2350000, "inCash": 2650000, "diff": 0, "status": "Закрыта"}
+  ],
+  "supplies": [
+    {"id": 4, "date": "03.07", "supplier": "Мясной двор Бухара", "storage": "Склад 1 (кухня)", "items": "Говядина 20 кг", "sum": 1800000, "debt": 0, "status": "Проведена"},
+    {"id": 3, "date": "03.07", "supplier": "Ризо-Опт", "storage": "Склад 1 (кухня)", "items": "Рис 20 кг, Морковь 15 кг, Лук 10 кг, Масло 10 л", "sum": 855000, "debt": 855000, "status": "Проведена"}
+  ],
+  "wastes": [
+    {"id": 1, "date": "02.07", "storage": "Склад 1 (кухня)", "items": "Помидоры 1,2 кг", "sum": 10800, "employee": "Бахтиёр Раимов", "reason": "Порча"},
+    {"id": 2, "date": "30.06", "storage": "Склад бара", "items": "Кока-Кола 0,5 ×2", "sum": 10000, "employee": "Дилноза Салимова", "reason": "Бой/брак"}
+  ],
+  "inventoryChecks": [
+    {"id": 1, "storage": "Склад 1 (кухня)", "periodStart": "01.06", "date": "30.06 22:00", "type": "Полная", "result": -48000, "status": "Проведена"}
+  ],
+  "promotions": [
+    {"id": 1, "name": "Счастливые часы −20% на шашлыки", "dateStart": "01.07.2026", "dateEnd": "31.07.2026", "bonuses": "Нет", "active": true, "condition": "Пн-Пт с 15:00 до 18:00", "result": "Скидка 20% на категорию «Шашлыки»"}
+  ],
+  "orderSources": ["В заведении", "Навынос", "Доставка", "Telegram-бот"],
+  "paymentMethods": ["Наличными", "Карточкой", "Сертификатом", "Бонусами"],
+  "subscription": {"invoice": "INV-567053", "dueDate": "09.07.2026", "amount": "59,00 $", "plan": "Mini / 1 заведение", "trialDaysLeft": 5}
+}
