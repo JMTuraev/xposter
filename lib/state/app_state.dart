@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models.dart';
 import '../services/auth_service.dart';
 import '../services/notification_service.dart';
@@ -411,6 +414,104 @@ class AppState extends ChangeNotifier {
   /// PIN bilan qayta kirish mumkin.
   bool get isLocked => session == null && currentCafeId != null;
 
+  // ────────────── Obuna nazorati (QATTIQ BLOK; server vaqti bo'yicha) ──────────────
+  /// Server bilan lokal soat farqi (`serverNow - localNow`). Login'dan keyin
+  /// `syncServerClock()` to'ldiradi; oflaynda oxirgi ma'lum qiymat ishlaydi.
+  Duration serverOffset = Duration.zero;
+  DateTime? _lastSeenWall;
+  Timer? _wallTimer;
+  static const String _kLastWall = 'sub.lastWall';
+
+  /// Kalendar-firibga qarshi: har 5 daqiqada «oxirgi ko'rilgan vaqt» saqlanadi.
+  /// Soat orqaga surilsa `subNow` bu qiymatdan pastga tushmaydi (server rules
+  /// baribir `request.time` bilan rad etadi — bu faqat UI uchun).
+  Future<void> initClockGuard() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final ms = p.getInt(_kLastWall);
+      if (ms != null) _lastSeenWall = DateTime.fromMillisecondsSinceEpoch(ms);
+      _wallTimer?.cancel();
+      _wallTimer = Timer.periodic(const Duration(minutes: 5), (_) { _touchWall(); });
+      await _touchWall();
+    } catch (_) {}
+  }
+
+  Future<void> _touchWall() async {
+    try {
+      final now = DateTime.now().add(serverOffset);
+      if (_lastSeenWall == null || now.isAfter(_lastSeenWall!)) {
+        _lastSeenWall = now;
+        final p = await SharedPreferences.getInstance();
+        await p.setInt(_kLastWall, now.millisecondsSinceEpoch);
+      }
+    } catch (_) {}
+  }
+
+  /// Obuna hisoblari uchun «hozir»: lokal soat + server farqi, va hech qachon
+  /// oxirgi ko'rilgan vaqtdan ORQAGA qaytmaydi.
+  DateTime get subNow {
+    var now = DateTime.now().add(serverOffset);
+    final seen = _lastSeenWall;
+    if (seen != null && now.isBefore(seen)) now = seen;
+    return now;
+  }
+
+  /// Serverdan haqiqiy vaqt (ID token orqali) — offset to'g'rilanadi.
+  Future<void> syncServerClock() async {
+    try {
+      final t = await _auth.fetchServerTime();
+      if (t != null) {
+        serverOffset = t.difference(DateTime.now());
+        await _touchWall();
+      }
+    } catch (_) {}
+  }
+
+  Cafe? get currentCafe {
+    final id = currentCafeId;
+    if (id == null) return null;
+    for (final c in cafes) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  /// Obuna amal qilish muddati: to'lov (`paidUntil`) yoki sinov (`trialUntil`,
+  /// bo'lmasa `createdAt + 7 kun`) — qaysinisi uzoqroq bo'lsa.
+  DateTime? get subUntil {
+    final c = currentCafe;
+    if (c == null) return null;
+    DateTime? until = c.paidUntil;
+    final trial = c.trialUntil ?? c.createdAt?.add(const Duration(days: 7));
+    if (trial != null && (until == null || trial.isAfter(until))) until = trial;
+    return until;
+  }
+
+  /// QATTIQ BLOK: muddat o'tgan — ilova ochilmaydi (server rules yozuvni ham
+  /// rad etadi). Muddat maydonlari umuman yo'q (migratsiyagacha eski kafe) —
+  /// bloklamaymiz: server tomonda ham xuddi shu istisno bor.
+  bool get subBlocked {
+    if (currentCafeId == null || !repo.ready) return false;
+    final u = subUntil;
+    if (u == null) return false;
+    return subNow.isAfter(u);
+  }
+
+  /// Muddat tugashiga qolgan to'liq kunlar (banner uchun). null — noma'lum.
+  int? get subDaysLeftSrv {
+    final u = subUntil;
+    if (u == null) return null;
+    final d = u.difference(subNow).inDays;
+    return d < 0 ? 0 : d;
+  }
+
+  /// Blok ekranidagi «Проверить оплату»: server soati + kafe hujjati serverdan.
+  Future<void> refreshSubscription() async {
+    await syncServerClock();
+    try { await repo.refreshCafeFromServer(); } catch (_) {}
+    notifyListeners();
+  }
+
   Future<void> resendEmailVerification() => _auth.sendEmailVerification();
 
   /// Ilova ochilganda avvalgi Firebase sessiyani tiklaydi (main'dan chaqiriladi).
@@ -447,6 +548,9 @@ class AppState extends ChangeNotifier {
     NotificationService.instance
         .subscribeForCafe(ctx.cafeId, isOwner: ctx.isOwner)
         .catchError((_) {});
+    // Obuna gate: server soati + kalendar-qo'riqchi.
+    syncServerClock();
+    initClockGuard();
     session!.lastLogin = 'сейчас';
     // Oxirgi kirishni xodim hujjatiga yozamiz (merge — PIN saqlanadi).
     final sUid = session!.uid;

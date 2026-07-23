@@ -8,6 +8,7 @@ import 'theme.dart';
 import 'state/app_state.dart';
 import 'screens/root_scaffold.dart';
 import 'screens/auth/login_screen.dart';
+import 'screens/subscription/sub_block_screen.dart';
 
 /// Background/terminated holatda kelgan FCM xabari. Notification-turdagi
 /// xabarni tizim o'zi tray'da ko'rsatadi — bu yerda qo'shimcha ish shart emas.
@@ -93,6 +94,8 @@ class _AuthGate extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     if (app.bootstrapping) return const _Splash();
+    // QATTIQ BLOK: obuna muddati o'tgan — faqat to'lov ekrani (ilova yopiq).
+    if (app.subBlocked) return const SubBlockScreen();
     return app.isAuthed ? const RootScaffold() : const LoginScreen();
   }
 }

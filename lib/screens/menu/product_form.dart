@@ -71,7 +71,7 @@ void _showProductForm(BuildContext context, AppState app, {Product? existing}) {
         _chipRow(_kShops, workshop, (v) => setS(() => workshop = v)),
         const SizedBox(height: 11),
         _label('Обложка — фото или эмодзи'),
-        _photoPicker(imagePath, emoji, () async { await _pickImage((path) => setS(() => imagePath = path)); }, () => setS(() => imagePath = null)),
+        _photoPicker(imagePath, emoji, () async { await _pickImage(ctx, app, (path) => setS(() => imagePath = path)); }, () => setS(() => imagePath = null)),
         const SizedBox(height: 8),
         _emojiGrid(emoji, (e) => setS(() => emoji = e)),
         const SizedBox(height: 8),
@@ -209,7 +209,7 @@ void _showTechForm(BuildContext context, AppState app, {Product? existing}) {
         _chipRow(_kShops, workshop, (v) => setS(() => workshop = v)),
         const SizedBox(height: 11),
         _label('Обложка — фото или эмодзи 🍽️'),
-        _photoPicker(imagePath, '🍽️', () async { await _pickImage((path) => setS(() => imagePath = path)); }, () => setS(() => imagePath = null)),
+        _photoPicker(imagePath, '🍽️', () async { await _pickImage(ctx, app, (path) => setS(() => imagePath = path)); }, () => setS(() => imagePath = null)),
         const SizedBox(height: 10),
         Row(children: [
           RichText(text: TextSpan(children: [
@@ -475,11 +475,24 @@ Widget _smallDropdown(String value, List<String> options, ValueChanged<String> o
 }
 
 // ── Rasm yuklash (galereya) ──
-Future<void> _pickImage(void Function(String path) onPicked) async {
+Future<void> _pickImage(BuildContext context, AppState app, void Function(String path) onPicked) async {
   try {
     final x = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 70, maxWidth: 900);
-    if (x != null) onPicked(x.path);
-  } catch (_) {/* ruxsat berilmadi yoki bekor qilindi */}
+    if (x == null) return;
+    if (!context.mounted) return;
+    // Rasmni Firebase Storage'ga yuklab, download URL'ni saqlaymiz — shunda rasm
+    // IKKALA ilovada (Android + Windows) ko'rinadi. Ilgari lokal fayl yo'li
+    // saqlanardi va boshqa qurilmада ko'rinmasdi. Yuklanmasa — lokal yo'lга tushamiz.
+    showToast(context, 'Загрузка фото…', color: AppColors.textSecondary, bg: AppColors.bgSecondary, icon: Icons.cloud_upload_outlined);
+    final bytes = await x.readAsBytes();
+    final url = app.repo.ready ? await app.repo.uploadImageBytes(bytes) : null;
+    onPicked(url ?? x.path);
+    if (context.mounted && url == null) {
+      showToast(context, 'Фото сохранено локально (облако недоступно)', color: AppColors.warning, bg: AppColors.bgSecondary, icon: Icons.cloud_off_outlined);
+    }
+  } catch (_) {
+    if (context.mounted) showToast(context, 'Не удалось загрузить фото', color: AppColors.danger, bg: AppColors.dangerSoft, icon: Icons.error_outline);
+  }
 }
 
 Widget _photoPicker(String? imagePath, String emoji, VoidCallback onPick, VoidCallback onClear) {

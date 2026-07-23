@@ -62,5 +62,19 @@ class AuthService {
     return _auth.sendPasswordResetEmail(email: email.trim());
   }
 
+  /// SERVER vaqti (taxminan, ±soniyalar): ID token majburan yangilanganda
+  /// Firebase qaytargan `issuedAtTime`. Lokal soat buzilgan bo'lsa ham server
+  /// o'z vaqtini beradi — obuna gate shu bilan to'g'rilanadi.
+  Future<DateTime?> fetchServerTime() async {
+    try {
+      final u = _auth.currentUser;
+      if (u == null) return null;
+      final r = await u.getIdTokenResult(true);
+      return r.issuedAtTime;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> signOut() => _auth.signOut();
 }

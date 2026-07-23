@@ -372,6 +372,10 @@ class Cafe {
   bool cashShiftsEnabled;
   String subscriptionStatus; // active | past_due | canceled | trial
   String? nextBilling;
+  // ── Obuna muddatlari (FAQAT SERVER yozadi; rules mijoz yozuvini muzlatadi) ──
+  DateTime? paidUntil;   // to'langan muddat oxiri (admin/webhook uzaytiradi)
+  DateTime? trialUntil;  // sinov muddati oxiri (migratsiya/admin)
+  DateTime? createdAt;   // kafe yaratilgan SERVER vaqti; sinov = createdAt + 7 kun
   Cafe({
     required this.id,
     required this.ownerUid,
@@ -389,6 +393,9 @@ class Cafe {
     this.cashShiftsEnabled = true,
     this.subscriptionStatus = 'trial',
     this.nextBilling,
+    this.paidUntil,
+    this.trialUntil,
+    this.createdAt,
   });
   bool get billingActive =>
       subscriptionStatus == 'active' || subscriptionStatus == 'trial';

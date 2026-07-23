@@ -379,5 +379,10 @@ Cafe cafeFromMap(String id, Map<String, dynamic> m) {
     cashShiftsEnabled: m['cashShiftsEnabled'] as bool? ?? true,
     subscriptionStatus: sub['status'] as String? ?? 'trial',
     nextBilling: sub['nextBilling'] as String?,
+    // Obuna muddatlari — server yozadi, mijoz FAQAT o'qiydi.
+    // (cafeToMap ularni ATAYLAB yozmaydi: rules baribir rad etadi.)
+    paidUntil: m['paidUntil'] is Timestamp ? (m['paidUntil'] as Timestamp).toDate() : null,
+    trialUntil: m['trialUntil'] is Timestamp ? (m['trialUntil'] as Timestamp).toDate() : null,
+    createdAt: m['createdAt'] is Timestamp ? (m['createdAt'] as Timestamp).toDate() : null,
   );
 }

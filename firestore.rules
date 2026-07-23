@@ -3,6 +3,10 @@ rules_version = '2';
 // Buxoro POS — RBAC Security Rules (BACKEND-TAYYORGARLIK.md §3, §9, §12).
 // Multi-tenant: owners/{uid}, cafes/{cafeId}, cafes/{cafeId}/{employees,...}.
 // Rollar (§3): Владелец, Управляющий, Администратор зала, Официант, Повар, Маркетолог.
+//
+// 1.0.8: OBUNA GATE (billing) — `subActive()`. Muddat SERVER vaqtida
+// (`request.time`) tekshiriladi: kassa kompyuterining kalendar'ini buzish
+// hech narsa bermaydi. paidUntil/trialUntil/createdAt FAQAT Admin SDK yozadi.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -50,13 +54,24 @@ service cloud.firestore {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
     }
     // «Код заведения» faqat BIR MARTA (bo'sh bo'lganda) yoziladi.
-    // `_assignCafeCode` kafe yaratilgach kodni `set(merge)` bilan qo'yadi — buni
-    // to'sib qo'ymaslik kerak; lekin mavjud kodni o'zgartirish taqiqlanadi
-    // (aks holda xodimlar kirish kodidan uzilib qolardi).
     function codeAssignable() {
       return !('code' in resource.data)
           || resource.data.code == null
           || resource.data.code == '';
+    }
+
+    // ── OBUNA GATE (1.0.8, Y-8/billing) ──
+    // Faol = to'lov (paidUntil) YOKI sinov tugamagan. Sinov: trialUntil,
+    // bo'lmasa createdAt + 7 kun (604800000 ms). request.time = SERVER vaqti.
+    // Legacy: uchala maydon ham yo'q (migratsiyagacha yaratilgan kafe) — ruxsat;
+    // yangi kafe yaratishda `createdAt` majburiy, shuning uchun bu teshik emas.
+    function subActive(cafeId) {
+      let c = cafeDoc(cafeId);
+      return request.time < c.get('paidUntil', timestamp.date(1970, 1, 1))
+          || request.time < c.get('trialUntil', timestamp.date(1970, 1, 1))
+          || (('createdAt' in c) && c.createdAt is timestamp
+              && request.time < timestamp.value(c.createdAt.toMillis() + 604800000))
+          || (!('createdAt' in c) && !('paidUntil' in c) && !('trialUntil' in c));
     }
 
     // ── owners ──
@@ -64,20 +79,22 @@ service cloud.firestore {
       allow read, write: if signedIn() && request.auth.uid == uid;
     }
 
+    // ── Ilova konfiguratsiyasi (versiya e'loni, ichki update) ──
+    // O'qish ochiq (login ekranida ham kerak bo'lishi mumkin); yozish — faqat
+    // Admin SDK (`_sub_admin.js release ...`).
+    match /appConfig/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // ── Collection-group: xodim o'z hujjatini uid bo'yicha topadi (login) ──
-    // resolveContext: collectionGroup('employees').where('uid','==',uid)
     match /{path=**}/employees/{empId} {
       allow read: if signedIn() && resource.data.uid == request.auth.uid;
     }
 
     // ── «Код заведения» → cafeId (xodim kirishi) ──
-    // O'qish ochiq: kod auth'dan OLDIN kerak (sintetik email yasash uchun);
-    // kod faqat cafeId'ga ishora qiladi, ma'lumotga kirish bermaydi.
     match /cafeCodes/{code} {
       allow read: if true;
-      // `create` — kod bo'sh bo'lsa. `update` — faqat MAVJUD egasi o'zgartira oladi:
-      // avval faqat YANGI cafeId tekshirilardi, ya'ni har qanday owner boshqa
-      // kafening kodini o'ziga tortib olib, uning xodimlarini kirishdan uzardi.
       allow create: if signedIn() &&
         get(/databases/$(database)/documents/cafes/$(request.resource.data.cafeId)).data.ownerUid == request.auth.uid;
       allow update: if signedIn() &&
@@ -88,36 +105,34 @@ service cloud.firestore {
 
     // ── cafes ──
     match /cafes/{cafeId} {
-      // MUHIM: query (where ownerUid==uid) uchun resource.data orqali tekshiriladi —
-      // get()-ga asoslangan isOwner() list-so'rovlarda isbotlanmaydi (PERMISSION_DENIED edi).
       allow read: if signedIn() &&
         (resource.data.ownerUid == request.auth.uid || isMember(cafeId));
-      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
-      // Konfiguratsiyani owner/manager yangilaydi; o'chirish faqat owner.
-      // MUHIM: `ownerUid` yangilashda O'ZGARMAYDI — aks holda Управляющий uni
-      // o'ziga yozib kafeni tortib olardi (tenant takeover).
-      // `subscription`/`trialEndsAt` — faqat server (Admin SDK): mijoz obunani
-      // o'zi «to'langan» deb belgilay olmasin.
-      // `code` — faqat bir marta (bo'sh bo'lganda) yoziladi, keyin muzlaydi.
+      // 1.0.8: yangi kafe (1.0.8 ilova) server-vaqtli `createdAt` bilan
+      // yaratiladi — sinov shundan hisoblanadi, kalendar firibi o'tmaydi.
+      // ORQAGA MOSLIK: Play'dagi eski (1.0.7) ilova `createdAt` yubormaydi —
+      // uni RAD ETSAK eski ilovada ro'yxatdan o'tish buziladi. Shuning uchun
+      // `createdAt` yo YO'Q (eski ilova → legacy-istisno bilan ishlaydi,
+      // keyin migratsiya qilinadi), YOKI aynan server vaqti (yangi ilova).
+      // Ikkala holatda ham paidUntil/trialUntil ni mijoz qo'yib ololmaydi.
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid
+        && (!('createdAt' in request.resource.data)
+            || request.resource.data.createdAt == request.time)
+        && !('paidUntil' in request.resource.data)
+        && !('trialUntil' in request.resource.data);
+      // `ownerUid` — tenant takeover'ga qarshi muzlatilgan.
+      // `subscription`/`trialEndsAt`/`paidUntil`/`trialUntil`/`createdAt` —
+      // faqat server (Admin SDK): mijoz obunani o'zi uzaytira olmasin.
       allow update: if canManage(cafeId)
-        && unchanged(['ownerUid', 'subscription', 'trialEndsAt'])
+        && unchanged(['ownerUid', 'subscription', 'trialEndsAt', 'paidUntil', 'trialUntil', 'createdAt'])
         && (unchanged(['code']) || codeAssignable());
       allow delete: if isOwner(cafeId);
 
       // ── employees ──
       match /employees/{empId} {
         allow read: if isMember(cafeId) || isOwner(cafeId);
-        // Xodim yaratish/o'chirish/rol — Cloud Function (Admin SDK) orqali.
-        // Bu yerda: owner/manager to'g'ridan-to'g'ri yozishi mumkin (zaxira yo'l).
         allow create, delete: if canManage(cafeId);
-        // Owner/manager to'liq; xodim faqat o'z hujjatini cheklangan yangilaydi.
-        // `revenue`/`checks` — xodim o'z statistikasini shishirmasin;
-        // `uid`/`login` — o'zgarmas identifikatorlar.
-        // Y-2: sotuvchi O'Z hujjatida revenue/checks ni faqat OSHIRA oladi
-        // (completePayment batch increment qiladi); role/active/uid/login
-        // muzlatiladi. Ilgari revenue/checks umuman o'zgarmas edi → o'z hisobi
-        // (loginByStaffCode) bilan kirgan ofitsiantning butun sotuv batch'i rad
-        // etilardi (kassa/sklad/bonus yozilmasdan qolardi).
+        // Y-2: sotuvchi O'Z hujjatida revenue/checks ni faqat OSHIRA oladi;
+        // role/active/uid/login muzlatiladi.
         allow update: if canManage(cafeId)
           || (request.auth.uid == empId
               && request.resource.data.role == resource.data.role
@@ -140,7 +155,6 @@ service cloud.firestore {
       // ── Ombor (sklad) ──
       match /ingredients/{id} {
         allow read: if isMember(cafeId);
-        // Sotuvda qoldiq kamayadi → sotuvchi ham yozadi; boshqacha — sklad huquqi.
         allow write: if canStock(cafeId) || canSell(cafeId);
       }
       match /suppliers/{id} {
@@ -171,23 +185,16 @@ service cloud.firestore {
       // ── Moliya (finance) ──
       match /accounts/{id} {
         allow read: if isMember(cafeId);
-        // Balans sotuvda ham o'zgaradi (kassa yashigi) → canSell ham yozadi.
-        // Lekin hisobni YARATISH/O'CHIRISH faqat moliya huquqi bilan
-        // (ofitsiant kassa yashigini o'chirib izini yashira olmasin).
         allow create, delete: if canFinance(cafeId);
         allow update: if canFinance(cafeId) || canSell(cafeId);
       }
       match /transactions/{id} {
         allow read: if isMember(cafeId);
-        // Har bir SOTUV `persistSale` ichida transaction yozuvini yaratadi —
-        // shuning uchun `create` sotuvchiga ham ochiq. Aks holda ofitsiant
-        // smenasida moliya jurnali jim bo'sh qolardi (PERMISSION_DENIED).
-        // Tahrirlash/o'chirish — faqat moliya huquqi.
-        // KR-6: eng kamida summa tipini tekshiramiz (buzuq/soxta hujjat kirmasin).
-        // To'liq himoya (amount == receipt.sum, balansni faqat server yozishi)
-        // server-avtoritar to'lovни (CF completePayment) talab qiladi — audit'da qayd.
+        // KR-6: summa tipi tekshiriladi. 1.0.8: obuna tugagan bo'lsa yangi
+        // moliyaviy yozuvlar ham to'xtaydi (subActive).
         allow create: if (canFinance(cafeId) || canSell(cafeId))
-          && request.resource.data.amount is number;
+          && request.resource.data.amount is number
+          && subActive(cafeId);
         allow update, delete: if canFinance(cafeId);
       }
 
@@ -208,10 +215,9 @@ service cloud.firestore {
       // ── Kassa: cheklar ──
       match /receipts/{id} {
         allow read: if isMember(cafeId);
-        allow create: if canSell(cafeId);
-        // Y-11/M3: sotuvchi vozvrat uchun faqat `status`ni o'zgartira oladi;
-        // `sum`/`items`/`profit`/`id` MUZLATILADI — eski chek tahrirlab
-        // firibgarlik qilinmasin. To'liq tahrir — faqat menejer.
+        // 1.0.8 OBUNA GATE: muddat o'tgan — yangi chek YOZILMAYDI (qattiq blok).
+        allow create: if canSell(cafeId) && subActive(cafeId);
+        // Y-11/M3: sotuvchi faqat `status`ni o'zgartira oladi.
         allow update: if canManage(cafeId)
           || (canSell(cafeId)
               && request.resource.data.sum == resource.data.sum
@@ -222,17 +228,15 @@ service cloud.firestore {
       }
 
       // ── Kassa: ochiq cheklar (stollardagi buyurtmalar) ──
-      // Blok SHART: usiz oxiridagi `match /{document=**}` hamma yozuvni RAD
-      // etadi (xato catchError'da jim yutiladi — `shifts` bilan shu bo'lgan).
       match /openChecks/{id} {
         allow read: if isMember(cafeId);
-        // To'langan/bekor qilingan chek delete qilinadi — write ichida delete ham bor.
-        allow write: if canSell(cafeId) || canManage(cafeId);
+        // 1.0.8: yangi buyurtma yozish/tahrirlash — faqat obuna faol bo'lsa.
+        // delete OCHIQ qoladi: eski cheklarni yopish/tozalash bloklanmasin.
+        allow create, update: if (canSell(cafeId) || canManage(cafeId)) && subActive(cafeId);
+        allow delete: if canSell(cafeId) || canManage(cafeId);
       }
 
       // ── Kassa: «Закрыть без оплаты» audit jurnali (№5) ──
-      // O'ZGARMAS: faqat create — kassir yozadi, hech kim tahrirlay/o'chira
-      // olmaydi (aks holda audit ma'nosini yo'qotadi). O'qish — boshqaruvga.
       match /voidedChecks/{id} {
         allow read: if canManage(cafeId);
         allow create: if canSell(cafeId) || canManage(cafeId);
@@ -240,11 +244,10 @@ service cloud.firestore {
       }
 
       // ── Kassa: smenalar (Кассовая смена / Z-отчёт) ──
-      // Sotuvchi smenani ochadi/yopadi va har chekda ko'rsatkichlarni oshiradi.
       match /shifts/{id} {
         allow read: if isMember(cafeId);
-        allow create, update: if canSell(cafeId) || canManage(cafeId);
-        // Yopilgan smenani o'chirish mumkin emas (Z-otchet auditi buzilmasin).
+        // 1.0.8: yangi smena/smena yangilash — faqat obuna faol bo'lsa.
+        allow create, update: if (canSell(cafeId) || canManage(cafeId)) && subActive(cafeId);
         allow delete: if false;
       }
 

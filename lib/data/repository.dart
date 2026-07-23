@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import '../models.dart';
 import '../state/app_state.dart';
 import '../utils/pin_hash.dart';
@@ -139,6 +141,14 @@ class FirestoreRepository {
     // Sozlamalar ekranining saqlangan qiymatlari (bo'lmasa — bo'sh).
     final ui = snap.data()!['uiSettings'];
     app.uiSettings = ui is Map ? Map<String, dynamic>.from(ui) : {};
+    // JONLI kuzatuv: paidUntil/trialUntil o'zgarsa obuna bloki darhol
+    // ko'tariladi/tushadi (masalan, to'lovdan keyin admin muddatni uzaytirsa).
+    _subs.add(db.cafe(cafeId).snapshots().listen((s) {
+      final d = s.data();
+      if (d == null) return;
+      app.applyCafe(cafeFromMap(cafeId, d));
+      app.notify();
+    }, onError: (_) {}));
   }
 
   /// Unikal 6 raqamli kod yaratib, cafeCodes/{code} va cafe.code ga yozadi.
@@ -334,6 +344,23 @@ class FirestoreRepository {
     await db.products(_c!).doc(id.toString()).delete();
   }
 
+  /// Rasm (bytes) ni Firebase Storage'ga yuklaydi va download URL qaytaradi.
+  /// `putData` bytes bilan ishlaydi — web'da ham, native'da ham (dart:io kerak
+  /// emas). URL Firestore'ga yozilganda IKKALA ilova (Android+Windows) uni
+  /// `Image.network` bilan ko'rsatadi — ilgari lokal fayl yo'li saqlanardi va
+  /// boshqa qurilmада ko'rinmasdi. null = yuklanmadi (fallback: lokal yo'l).
+  Future<String?> uploadImageBytes(Uint8List bytes) async {
+    if (_c == null) return null;
+    try {
+      final ref = FirebaseStorage.instance
+          .ref('cafes/$_c/products/${DateTime.now().microsecondsSinceEpoch}.jpg');
+      await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+      return await ref.getDownloadURL();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> saveIngredient(Ingredient i) async {
     if (_c == null) return;
     await db.ingredients(_c!).doc(i.id.toString()).set(ingredientToMap(i));
@@ -486,6 +513,17 @@ class FirestoreRepository {
   Future<void> updateCafe(Map<String, dynamic> patch) async {
     if (_c == null) return;
     await db.cafe(_c!).set(patch, SetOptions(merge: true));
+  }
+
+  /// Kafe hujjatini SERVERDAN majburan o'qiydi — blok ekranidagi
+  /// «Проверить оплату» (kesh emas, aynan server holati kerak).
+  Future<void> refreshCafeFromServer() async {
+    if (_c == null) return;
+    final snap = await db.cafe(_c!).get(const GetOptions(source: Source.server));
+    final d = snap.data();
+    if (d == null) return;
+    app.applyCafe(cafeFromMap(_c!, d));
+    app.notify();
   }
 
   Future<void> saveStorageRaw(Map<String, dynamic> s) async {
@@ -695,15 +733,20 @@ class FirestoreRepository {
   }) async {
     final cafeRef = db.cafes.doc();
     final cafeId = cafeRef.id;
-    final trialEnds = DateTime.now().add(const Duration(days: 14)).toIso8601String().substring(0, 10);
-    await cafeRef.set(cafeToMap(Cafe(
-      id: cafeId,
-      ownerUid: uid,
-      name: cafeName,
-      spot: '$cafeName — Центр',
-      trialEndsAt: trialEnds,
-      subscriptionStatus: 'trial',
-    )));
+    // Sinov endi 7 KUN va SERVER vaqtidan (`createdAt` = serverTimestamp;
+    // rules `createdAt == request.time` talab qiladi) — kalendar firibi o'tmaydi.
+    final trialEnds = DateTime.now().add(const Duration(days: 7)).toIso8601String().substring(0, 10);
+    await cafeRef.set({
+      ...cafeToMap(Cafe(
+        id: cafeId,
+        ownerUid: uid,
+        name: cafeName,
+        spot: '$cafeName — Центр',
+        trialEndsAt: trialEnds,
+        subscriptionStatus: 'trial',
+      )),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
     // Owner ham employees ichida (POS PIN almashinuvi uchun) — har cafeda o'z uid'i bilan.
     // PIN darhol hash'lanadi (HOLAT-16).
     final ownerEmp = Employee(
