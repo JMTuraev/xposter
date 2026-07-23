@@ -136,10 +136,11 @@
     <button class="back" id="testsBack">← Назад</button>
     <div style="font-weight:700;font-size:15px">🧪 Центр тестирования</div>
     <div style="flex:1"></div>
-    <button class="lo" id="runBtn" style="width:auto;margin:0;background:var(--accent);color:#fff;border-color:var(--accent)">Запустить все тесты</button>
+    <button class="lo" id="runBtn" style="width:auto;margin:0 8px 0 0">Быстрые проверки</button>
+    <button class="lo" id="runE2EBtn" style="width:auto;margin:0;background:var(--accent);color:#fff;border-color:var(--accent)">Полный E2E тест</button>
   </div>
   <div class="dwrap" id="testsBody">
-    <div class="empty">Нажмите «Запустить все тесты».<br>Проверяются: инфраструктура, целостность данных всех заведений, подписки/блокировки, интеграционный поток (создание → продажа → возврат → проверка → очистка) и модель ролей.</div>
+    <div class="empty"><b>Быстрые проверки</b> (~4 с): инфраструктура, целостность данных всех заведений, подписки, интеграционный поток, модель ролей.<br><br><b>Полный E2E тест</b> (~30–60 с): создаёт тест-аккаунты для каждой роли и по-настоящему вызывает КАЖДУЮ Cloud Function (createEmployee, setEmployeeActive, completePayment, deleteAccount…) и проверяет ВСЕ правила доступа по ролям (официант/повар/менеджер/чужой) + подписку. В конце всё удаляется.</div>
   </div>
 </div>
 
@@ -225,15 +226,17 @@ function show(which){
 // ── TEST CENTER ──
 $("testsBtn").onclick = ()=> $("tests").classList.remove("hidden");
 $("testsBack").onclick = ()=> $("tests").classList.add("hidden");
-$("runBtn").onclick = runTests;
-async function runTests(){
-  const btn=$("runBtn"); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
-  $("testsBody").innerHTML='<div class="empty"><span class="spin"></span> Выполняется… (интеграционный поток создаёт и удаляет тест-заведение)</div>';
+$("runBtn").onclick = ()=> runSuite("superAdminRunTests", $("runBtn"), "Быстрые проверки", "интеграционный поток создаёт и удаляет тест-заведение");
+$("runE2EBtn").onclick = ()=> runSuite("superAdminRunE2E", $("runE2EBtn"), "Полный E2E тест", "создаются тест-аккаунты, вызываются реальные функции и проверяются правила — до минуты");
+async function runSuite(fnName, btn, label, note){
+  const b1=$("runBtn"), b2=$("runE2EBtn"), old=btn.textContent;
+  b1.disabled=true; b2.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  $("testsBody").innerHTML=`<div class="empty"><span class="spin"></span> ${esc(label)}… (${esc(note)})</div>`;
   try{
-    const r=(await httpsCallable(fns,"superAdminRunTests")()).data;
+    const r=(await httpsCallable(fns,fnName,{timeout:600000})()).data;
     renderTests(r);
   }catch(e){ $("testsBody").innerHTML=`<div class="empty">Ошибка: ${esc(mapErr(e))}</div>`; }
-  btn.disabled=false; btn.textContent="Запустить снова";
+  b1.disabled=false; b2.disabled=false; btn.textContent=old;
 }
 function renderTests(r){
   const groups={};

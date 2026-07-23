@@ -229,42 +229,34 @@ exports.completePayment = onCall(async (request) => {
 
   const c = `cafes/${cafeId}`;
   await db.runTransaction(async (tx) => {
-    tx.set(db.doc(`${c}/receipts/${receipt.id}`), {
-      ...receipt,
-      createdAt: FieldValue.serverTimestamp(),
-    });
-    if (cashAmount) {
-      const cashRef = db.doc(`${c}/accounts/1`);
-      const cashSnap = await tx.get(cashRef);
-      tx.update(cashRef, { balance: (cashSnap.get("balance") || 0) + cashAmount });
-    }
-    if (employeeUid) {
-      const eRef = db.doc(`${c}/employees/${employeeUid}`);
-      const eSnap = await tx.get(eRef);
-      if (eSnap.exists) {
-        tx.update(eRef, {
-          revenue: (eSnap.get("revenue") || 0) + (receipt.sum || 0),
-          checks: (eSnap.get("checks") || 0) + 1,
-        });
-      }
-    }
-    if (clientId != null) {
-      const cliRef = db.doc(`${c}/clients/${clientId}`);
-      const cliSnap = await tx.get(cliRef);
-      if (cliSnap.exists) {
-        tx.update(cliRef, {
-          bonus: (cliSnap.get("bonus") || 0) - bonusSpent + bonusEarned,
-          totalSpent: (cliSnap.get("totalSpent") || 0) + (receipt.sum || 0),
-        });
-      }
-    }
+    // MUHIM: Firestore tranzaksiyasida BARCHA o'qishlar YOZISHLARDAN OLDIN
+    // bo'lishi shart. Ilgari receipt oldin yozilib, keyin o'qish qilingani
+    // uchun CF INTERNAL (500) bilan qulardi — shuning uchun ham u klientda
+    // ishlatilmasdan (WriteBatch bilan) qolgan edi. Endi to'g'ri.
+    const cashRef = cashAmount ? db.doc(`${c}/accounts/1`) : null;
+    const eRef = employeeUid ? db.doc(`${c}/employees/${employeeUid}`) : null;
+    const cliRef = (clientId != null) ? db.doc(`${c}/clients/${clientId}`) : null;
+    const cashSnap = cashRef ? await tx.get(cashRef) : null;
+    const eSnap = eRef ? await tx.get(eRef) : null;
+    const cliSnap = cliRef ? await tx.get(cliRef) : null;
+    const stockOps = [];
     for (const d of stockDeltas) {
       const iRef = db.doc(`${c}/ingredients/${d.ingredientId}`);
-      const iSnap = await tx.get(iRef);
-      if (iSnap.exists) {
-        const v = (iSnap.get("stock") || 0) - d.amount;
-        tx.update(iRef, { stock: v < 0 ? 0 : v });
-      }
+      stockOps.push({ ref: iRef, snap: await tx.get(iRef), amount: d.amount });
+    }
+    // ── endi yozishlar ──
+    tx.set(db.doc(`${c}/receipts/${receipt.id}`), { ...receipt, createdAt: FieldValue.serverTimestamp() });
+    if (cashSnap) tx.update(cashRef, { balance: (cashSnap.get("balance") || 0) + cashAmount });
+    if (eSnap && eSnap.exists) tx.update(eRef, {
+      revenue: (eSnap.get("revenue") || 0) + (receipt.sum || 0),
+      checks: (eSnap.get("checks") || 0) + 1,
+    });
+    if (cliSnap && cliSnap.exists) tx.update(cliRef, {
+      bonus: (cliSnap.get("bonus") || 0) - bonusSpent + bonusEarned,
+      totalSpent: (cliSnap.get("totalSpent") || 0) + (receipt.sum || 0),
+    });
+    for (const s of stockOps) {
+      if (s.snap.exists) { const v = (s.snap.get("stock") || 0) - s.amount; tx.update(s.ref, { stock: v < 0 ? 0 : v }); }
     }
   });
   return { ok: true };
@@ -333,9 +325,10 @@ exports.dailyAggregate = onSchedule(
   }
 );
 
-// ─────────────────── Super-admin konsoli (additive; superadmin.js) ───────────────────
-// Mavjud funksiyalarga tegmaydi — faqat yangi callable'lar eksport qiladi.
+
+// ─────────────────── Super-admin konsoli (additive) ───────────────────
 const superadmin = require("./superadmin");
 exports.superAdminList = superadmin.superAdminList;
 exports.superAdminCafeDetail = superadmin.superAdminCafeDetail;
 exports.superAdminRunTests = require("./tests").superAdminRunTests;
+exports.superAdminRunE2E = require("./e2e").superAdminRunE2E;
