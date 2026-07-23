@@ -32,6 +32,11 @@ void showSupplyForm(BuildContext context, AppState app) {
     showToast(context, 'Сначала добавьте ингредиенты: Остатки → ＋ → Ингредиент', color: AppColors.warning, bg: AppColors.warningSoft, icon: Icons.egg_outlined);
     return;
   }
+  // `storageNames.first` bo'sh ro'yxatda StateError bilan qulardi.
+  if (app.storageNames.isEmpty) {
+    showToast(context, 'Сначала добавьте склад', color: AppColors.warning, bg: AppColors.warningSoft, icon: Icons.warehouse_outlined);
+    return;
+  }
   final dateCtrl = TextEditingController(text: _today());
   String supplier = app.suppliers.isNotEmpty ? app.suppliers.first.name : 'Без поставщика';
   String wh = app.storageNames.first;

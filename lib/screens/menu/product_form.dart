@@ -174,10 +174,13 @@ void _showTechForm(BuildContext context, AppState app, {Product? existing}) {
   }
   if (rows.isEmpty) rows.add(_RecipeRow(ingNames.first));
 
-  int costPerUnitOf(String ingName) => app.ingredients.firstWhere((i) => i.name == ingName, orElse: () => app.ingredients.first).costPerUnit;
   int rowCost(_RecipeRow r) {
     final b = double.tryParse(r.brutto.text.replaceAll(',', '.')) ?? 0;
-    return (b / 1000 * costPerUnitOf(r.ingredient)).round();
+    final ing = app.ingredients.firstWhere((i) => i.name == r.ingredient, orElse: () => app.ingredients.first);
+    // O-2: 'шт' birlikda brutto = dona soni (÷1000 EMAS — sotuvdagi
+    // consumeStockForSale bilan bir xil); g/ml da ÷1000 (кг/л narxiga).
+    // Ilgari doim /1000 edi → donali ingredient (tuxum/non) tannarxi 1000× kam.
+    return ((ing.unit == 'шт' ? b : b / 1000) * ing.costPerUnit).round();
   }
 
   showAppSheet(context, title: existing == null ? 'Новая тех. карта' : 'Тех. карта', builder: (ctx) {

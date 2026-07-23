@@ -23,8 +23,6 @@ class _FinanceScreenState extends State<FinanceScreen> {
   String _accF = 'all';
 
   // P&L banner
-  bool _plBanner = true;
-
   // Kategoriyalar uchun lokal toggle holati (app_state da flag yo'q — REPORT).
   // Standart: hamma uchun onPos=true, inPL=true; foydalanuvchi o'zgartira oladi.
   final Map<String, bool> _catOnPos = {};
@@ -556,34 +554,61 @@ class _FinanceScreenState extends State<FinanceScreen> {
         ),
       ];
     }
-    final cashBal = app.accounts.firstWhere((a) => a.name.contains('ящик') || a.name.contains('Денежн'), orElse: () => app.accounts.first).balance;
-    return [
-      // Смена №42 — открыта
-      _shiftCard(
-        no: 'Смена №42',
-        badge: StatusBadge.warning('Открыта'),
-        sub: 'Открыл(а) Азиз Тошев · 09:02',
-        line1L: 'Начало смены',
-        line1V: groupNum(300000),
-        line2L: 'Сейчас в кассе',
-        line2V: groupNum(cashBal),
-        line2Color: AppColors.text,
-        onTap: () => _shiftDetail(app, open: true, cashBal: cashBal),
-      ),
-      const SizedBox(height: 8),
-      // Смена №41 — закрыта
-      _shiftCard(
-        no: 'Смена №41',
-        badge: StatusBadge.success('Закрыта'),
-        sub: 'Малика Юсупова · вчера 09:00 — вчера 22:04',
-        line1L: 'Инкассация',
-        line1V: groupNum(2350000),
-        line2L: 'Разница',
-        line2V: '0 ✓',
-        line2Color: AppColors.success,
-        onTap: () => _shiftDetail(app, open: false, cashBal: cashBal),
-      ),
-    ];
+    // HOLAT-17: soxta (hardcoded) smenalar olib tashlandi — endi real
+    // `app.currentShift` / `app.shiftsArchive` (Firestore `shifts` listener'i).
+    final cur = app.currentShift;
+    if (cur == null && app.shiftsArchive.isEmpty) {
+      return [
+        const SizedBox(height: 30),
+        const EmptyState(
+          emoji: '🕐',
+          title: 'Смен пока нет',
+          subtitle: 'Смена открывается на кассе (Функции → «Открыть смену»). '
+              'Продажи с этого устройства попадут в открытую смену автоматически.',
+        ),
+      ];
+    }
+    final out = <Widget>[];
+    if (cur != null) {
+      out.addAll([
+        _shiftCard(
+          no: 'Смена №${cur.id}',
+          badge: StatusBadge.warning('Открыта'),
+          sub: 'Открыл(а) ${cur.openedBy} · ${_dtLabel(cur.openedAt)} · ${cur.durationLabel()}',
+          line1L: 'Начало смены',
+          line1V: groupNum(cur.openingCash),
+          line2L: 'Выручка · чеки',
+          line2V: '${groupNum(cur.revenue)} · ${cur.checks}',
+          line2Color: AppColors.text,
+          onTap: () => _shiftDetail(app, cur),
+        ),
+        const SizedBox(height: 8),
+      ]);
+    }
+    for (final s in app.shiftsArchive.take(20)) {
+      final d = s.diff;
+      out.addAll([
+        _shiftCard(
+          no: 'Смена №${s.id}',
+          badge: StatusBadge.success('Закрыта'),
+          sub: '${s.closedBy ?? s.openedBy} · ${_dtLabel(s.openedAt)}'
+              '${s.closedAt != null ? ' — ${_dtLabel(s.closedAt!)}' : ''}',
+          line1L: 'Выручка · чеки',
+          line1V: '${groupNum(s.revenue)} · ${s.checks}',
+          line2L: 'Разница',
+          line2V: d == 0 ? '0 ✓' : '${d > 0 ? '+' : '−'}${groupNum(d.abs())}',
+          line2Color: d == 0 ? AppColors.success : AppColors.danger,
+          onTap: () => _shiftDetail(app, s),
+        ),
+        const SizedBox(height: 8),
+      ]);
+    }
+    return out;
+  }
+
+  String _dtLabel(DateTime d) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(d.day)}.${two(d.month)} ${two(d.hour)}:${two(d.minute)}';
   }
 
   Widget _shiftCard({
@@ -634,24 +659,32 @@ class _FinanceScreenState extends State<FinanceScreen> {
         ],
       );
 
-  void _shiftDetail(AppState app, {required bool open, required int cashBal}) {
-    final rows = open
-        ? <List<String>>[
-            ['Открыл(а)', 'Азиз Тошев'],
-            ['Начало смены', '09:02'],
-            ['Наличных на старте', sum(300000)],
-            ['Продажи наличными', sum(1490000)],
-            ['Сейчас в кассе', sum(cashBal)],
-          ]
-        : <List<String>>[
-            ['Кассир', 'Малика Юсупова'],
-            ['Открыта — закрыта', 'вчера 09:00 — вчера 22:04'],
-            ['Наличных на старте', sum(300000)],
-            ['Продажи наличными', sum(2050000)],
-            ['Инкассация', sum(2350000)],
-            ['Разница', '0 ✓'],
-          ];
-    final title = open ? 'Смена №42' : 'Смена №41';
+  void _shiftDetail(AppState app, Shift s) {
+    // Real smena tafsiloti (HOLAT-17) — Windows Z-otchet bilan bir manba.
+    final open = s.isOpen;
+    final rows = <List<String>>[
+      ['Открыл(а)', s.openedBy],
+      if (open)
+        ['Начало смены', _dtLabel(s.openedAt)]
+      else
+        ['Открыта — закрыта', '${_dtLabel(s.openedAt)} — ${s.closedAt != null ? _dtLabel(s.closedAt!) : '—'}'],
+      ['Наличных на старте', sum(s.openingCash)],
+      ['Выручка', sum(s.revenue)],
+      ['Чеки · средний чек', '${s.checks} · ${sum(s.avgCheck)}'],
+      ['Наличными', sum(s.cash)],
+      ['Карточкой', sum(s.card)],
+      if (s.bonus > 0) ['Бонусами', sum(s.bonus)],
+      if (s.debt > 0) ['В долг', sum(s.debt)],
+      if (s.debtRepaid > 0) ['Погашено долгов', sum(s.debtRepaid)],
+      if (open)
+        ['Сейчас в кассе', sum(app.cashBoxBalance)]
+      else ...[
+        ['Ожидалось в кассе', sum(s.expectedCash)],
+        ['Фактически', sum(s.countedCash)],
+        ['Разница', s.diff == 0 ? '0 ✓' : '${s.diff > 0 ? '+' : '−'}${sum(s.diff.abs())}'],
+      ],
+    ];
+    final title = 'Смена №${s.id}';
     showAppSheet(
       context,
       title: title,
@@ -690,56 +723,86 @@ class _FinanceScreenState extends State<FinanceScreen> {
   }
 
   // ═══════════════ P&L ═══════════════
+  // HOLAT-17: demo raqamlar olib tashlandi — joriy va o'tgan oy REAL
+  // ma'lumotdan hisoblanadi: savdo/tannarx — receiptsArchive (createdAt),
+  // xarajatlar — transactions (kategoriya bo'yicha).
   List<Widget> _pnl(AppState app) {
-    // (label, jun, jul, bold, isHeader)
-    const junBase = 68400000;
-    const julBase = 9180000;
+    final now = DateTime.now();
+    final curY = now.year, curM = now.month;
+    final prevDate = DateTime(now.year, now.month - 1);
+    final prevY = prevDate.year, prevM = prevDate.month;
+    const monthsRu = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+      'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
+    // Savdo va tannarx — cheklardan.
+    int salesCur = 0, salesPrev = 0, costCur = 0, costPrev = 0;
+    for (final r in app.receiptsArchive) {
+      if (r.status == 'Возврат') continue;
+      final c = r.createdAt;
+      if (c == null) continue;
+      if (c.year == curY && c.month == curM) {
+        salesCur += r.sum;
+        costCur += r.sum - r.profit;
+      } else if (c.year == prevY && c.month == prevM) {
+        salesPrev += r.sum;
+        costPrev += r.sum - r.profit;
+      }
+    }
+
+    // Xarajatlar — tranzaksiyalardan, kategoriya bo'yicha ('Продажи' chiqariladi —
+    // u yuqorida cheklardan olinadi, ikki marta sanalmasin).
+    final expCur = <String, int>{}, expPrev = <String, int>{};
+    for (final t in app.transactions) {
+      if (t.category == 'Продажи') continue;
+      if (t.amount >= 0) continue; // faqat xarajat qatorlari
+      final mm = int.tryParse(t.date.split(' ').first.split('.').elementAt(1)) ?? 0;
+      if (mm == curM) {
+        expCur[t.category] = (expCur[t.category] ?? 0) + t.amount;
+      } else if (mm == prevM) {
+        expPrev[t.category] = (expPrev[t.category] ?? 0) + t.amount;
+      }
+    }
+    final expCats = {...expCur.keys, ...expPrev.keys}.toList()..sort();
+    final expTotCur = expCur.values.fold(0, (s, v) => s + v);
+    final expTotPrev = expPrev.values.fold(0, (s, v) => s + v);
+
+    if (salesCur == 0 && salesPrev == 0 && expCats.isEmpty) {
+      return [
+        const SizedBox(height: 30),
+        const EmptyState(
+          emoji: '📊',
+          title: 'Пока нет данных для P&L',
+          subtitle: 'Отчёт строится из ваших продаж и расходов за текущий и прошлый месяц.',
+        ),
+      ];
+    }
+
+    final marginPrev = salesPrev - costPrev, marginCur = salesCur - costCur;
     final rows = <_PlRow>[
       _PlRow.header('Доходы'),
-      _PlRow.data('Продажи', 68400000, 9180000),
-      _PlRow.data('Себестоимость', -29400000, -4040000),
-      _PlRow.data('Маржа', 39000000, 5140000, bold: true),
-      _PlRow.header('Расходы'),
-      _PlRow.data('Аренда', -3500000, -3500000),
-      _PlRow.data('Зарплата', -12000000, -1600000),
-      _PlRow.data('Коммунальные', -1400000, -320000),
-      _PlRow.data('Маркетинг', -800000, 0),
-      _PlRow.data('Операционная прибыль', 21300000, -280000, bold: true),
+      _PlRow.data('Продажи', salesPrev, salesCur),
+      _PlRow.data('Себестоимость', -costPrev, -costCur),
+      _PlRow.data('Маржа', marginPrev, marginCur, bold: true),
+      if (expCats.isNotEmpty) _PlRow.header('Расходы'),
+      for (final cat in expCats)
+        _PlRow.data(cat, expPrev[cat] ?? 0, expCur[cat] ?? 0),
+      _PlRow.data('Операционная прибыль',
+          marginPrev + expTotPrev, marginCur + expTotCur, bold: true),
     ];
+
+    final junBase = salesPrev == 0 ? 1 : salesPrev; // 0 ga bo'linmaslik
+    final julBase = salesCur == 0 ? 1 : salesCur;
+    final prevName = monthsRu[prevM - 1];
+    final curName = monthsRu[curM - 1];
 
     String pct(int v, int base) => v == 0 ? '—' : '${(v.abs() / base * 100).round()}%';
     String money(int v) => (v < 0 ? '−' : '') + groupNum(v.abs());
 
+    // Insight — food cost dinamikasi (faqat ma'lumot bo'lsa).
+    final fcPrev = salesPrev > 0 ? (costPrev / salesPrev * 100).round() : null;
+    final fcCur = salesCur > 0 ? (costCur / salesCur * 100).round() : null;
+
     return [
-      if (_plBanner)
-        Container(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-          decoration: BoxDecoration(
-            color: AppColors.warningSoft,
-            borderRadius: BorderRadius.circular(AppRadius.card),
-            border: Border.all(color: const Color(0xFFEFE0C4)),
-          ),
-          child: Row(
-            children: [
-              const Text('💡', style: TextStyle(fontSize: 17)),
-              const SizedBox(width: 10),
-              Expanded(child: Text('Это пример отчёта на демо-цифрах', style: AppTheme.sans(size: 12.5, color: AppColors.textSecondary))),
-              const SizedBox(width: 10),
-              GestureDetector(
-                onTap: () {
-                  setState(() => _plBanner = false);
-                  showToast(context, 'P&L подключён к вашим данным (демо)', color: AppColors.info, bg: AppColors.surface, icon: Icons.link);
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
-                  decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(9)),
-                  child: Text('Подключить', style: AppTheme.sans(size: 12, weight: FontWeight.w600, color: Colors.white)),
-                ),
-              ),
-            ],
-          ),
-        ),
-      if (_plBanner) const SizedBox(height: 10),
       // Jadval
       AppCard(
         padding: EdgeInsets.zero,
@@ -752,8 +815,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
               child: Row(
                 children: [
                   const Expanded(child: SizedBox()),
-                  SizedBox(width: 92, child: Text('Июнь', textAlign: TextAlign.right, style: AppTheme.sans(size: 10, weight: FontWeight.w700, color: AppColors.textTertiary, letterSpacing: 0.4))),
-                  SizedBox(width: 92, child: Text('Июль', textAlign: TextAlign.right, style: AppTheme.sans(size: 10, weight: FontWeight.w700, color: AppColors.textTertiary, letterSpacing: 0.4))),
+                  SizedBox(width: 92, child: Text(prevName, textAlign: TextAlign.right, style: AppTheme.sans(size: 10, weight: FontWeight.w700, color: AppColors.textTertiary, letterSpacing: 0.4))),
+                  SizedBox(width: 92, child: Text(curName, textAlign: TextAlign.right, style: AppTheme.sans(size: 10, weight: FontWeight.w700, color: AppColors.textTertiary, letterSpacing: 0.4))),
                 ],
               ),
             ),
@@ -804,30 +867,36 @@ class _FinanceScreenState extends State<FinanceScreen> {
         ),
       ),
       const SizedBox(height: 10),
-      // Insight
-      AppCard(
-        padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('📈', style: TextStyle(fontSize: 19)),
-            const SizedBox(width: 11),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Себестоимость выросла: 43% → 44%', style: AppTheme.sans(size: 13, weight: FontWeight.w700)),
-                  const SizedBox(height: 3),
-                  Text(
-                    'Проверьте цены поставщиков на говядину и рис — они дают 60% food cost. Пересчитайте порции в тех. картах.',
-                    style: AppTheme.sans(size: 12, height: 1.5, color: AppColors.textSecondary),
-                  ),
-                ],
+      // Insight — real food cost dinamikasi (ma'lumot bo'lsagina).
+      if (fcCur != null)
+        AppCard(
+          padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('📈', style: TextStyle(fontSize: 19)),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      fcPrev == null
+                          ? 'Себестоимость: $fcCur% от продаж'
+                          : 'Себестоимость: $fcPrev% → $fcCur%',
+                      style: AppTheme.sans(size: 13, weight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Считается из тех. карт проданных блюд. Если доля растёт — проверьте закупочные цены и порции в тех. картах.',
+                      style: AppTheme.sans(size: 12, height: 1.5, color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
     ];
   }
 
@@ -1073,8 +1142,10 @@ class _FinanceScreenState extends State<FinanceScreen> {
             app.transactions.insert(0, tx);
             if (app.repo.ready) {
               app.repo.saveTransaction(tx);
-              app.repo.saveAccount(from);
-              app.repo.saveAccount(to);
+              // K3: ko'chirishni delta bilan — biri o'tib biri o'tmasa ham
+              // absolyut yozuv concurrent sotuvni bosmaydi.
+              app.repo.adjustAccountBalance(from.id, -v);
+              app.repo.adjustAccountBalance(to.id, v);
             }
             app.notify();
             Navigator.pop(ctx);

@@ -1,3 +1,5 @@
+import 'utils/pin_hash.dart';
+
 class Category {
   final int id;
   String name;
@@ -33,6 +35,7 @@ class Product {
   List<RecipeItem>? recipe; // тех.карта tarkibi (null/bo'sh → oddiy tovar)
   bool noDiscount;
   bool byWeight;
+  String? barcode; // shtrix-kod — xposterwin (Windows kassa) bilan umumiy maydon
 
   Product({
     required this.id,
@@ -48,6 +51,7 @@ class Product {
     this.recipe,
     this.noDiscount = false,
     this.byWeight = false,
+    this.barcode,
   });
 
   int get markup => cost == 0 ? 0 : (((price - cost) / cost) * 100).round();
@@ -94,6 +98,9 @@ class Employee {
   final int id;
   String name;
   String role;
+  /// FAQAT legacy/tranzit: yangi PIN'lar `pinHash`+`pinSalt` da saqlanadi,
+  /// serverga ochiq matn YOZILMAYDI. Migratsiyagacha eski hujjatlarda
+  /// to'lgan bo'lishi mumkin (tekshiruv `matchesPin` orqali).
   String pin;
   String phone;
   String? login;
@@ -103,6 +110,9 @@ class Employee {
   // ── Backend (BACKEND-TAYYORGARLIK.md §12) ──
   String? uid;      // Firebase Auth UID (employee doc id = uid)
   bool active;      // owner enable/disable (false → kira/ishlata olmaydi)
+  // ── PIN hash (HOLAT-16, utils/pin_hash.dart bilan) ──
+  String? pinSalt;
+  String? pinHash;
   Employee({
     required this.id,
     required this.name,
@@ -115,7 +125,30 @@ class Employee {
     this.checks = 0,
     this.uid,
     this.active = true,
+    this.pinSalt,
+    this.pinHash,
   });
+
+  /// Xodimda umuman PIN o'rnatilganmi (hash yoki legacy ochiq matn).
+  bool get hasPin => (pinHash != null && pinHash!.isNotEmpty) || pin.isNotEmpty;
+
+  /// Kiritilgan PIN shu xodimnikimi. Hash bo'lsa — hash solishtiriladi,
+  /// bo'lmasa legacy ochiq matn (migratsiyagacha bo'lgan hujjatlar).
+  bool matchesPin(String candidate) {
+    if (candidate.isEmpty) return false;
+    final h = pinHash, s = pinSalt;
+    if (h != null && h.isNotEmpty && s != null && s.isNotEmpty) {
+      return hashPin(s, candidate) == h;
+    }
+    return pin.isNotEmpty && pin == candidate;
+  }
+
+  /// Yangi PIN o'rnatish: salt+hash yoziladi, ochiq matn tozalanadi.
+  void setPin(String newPin) {
+    pinSalt = newPinSalt();
+    pinHash = hashPin(pinSalt!, newPin);
+    pin = '';
+  }
   String get initials {
     final parts = name.trim().split(' ').where((p) => p.isNotEmpty).toList();
     if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
@@ -144,6 +177,10 @@ class Client {
   String? email;
   String? comment;
   String? address;
+  /// Mijozning qarzi («В долг» to'lovi). Windows POS (xposterwin) yozadi —
+  /// bu yerda ham bo'lishi SHART, aks holda android'da mijozni tahrirlash
+  /// `saveClient` ning to'liq `set()` i bilan qarzni O'CHIRIB yuboradi.
+  int debt;
   Client({
     required this.id,
     required this.name,
@@ -157,6 +194,7 @@ class Client {
     this.email,
     this.comment,
     this.address,
+    this.debt = 0,
   });
   String get initials {
     final parts = name.trim().split(' ');
@@ -174,13 +212,17 @@ class Account {
 }
 
 class TxItem {
-  final int id;
+  final int id; // ketma-ket/displey raqami (Firestore hujjat kaliti EMAS)
   String date;
   String type; // расход | доход | перевод
   String category;
   String comment;
   int amount; // musbat/manfiy
   String account;
+  /// Firestore hujjat kaliti (auto-ID). K2 tuzatishi: parallel savdoda
+  /// `id` (lokal max+1) to'qnashsa ham har yozuv o'z docId'siga tushadi —
+  /// moliya jurnalidan hech bir tranzaksiya yo'qolmaydi.
+  String? docId;
   TxItem({
     required this.id,
     required this.date,
@@ -189,6 +231,7 @@ class TxItem {
     required this.comment,
     required this.amount,
     required this.account,
+    this.docId,
   });
 }
 
@@ -221,7 +264,7 @@ class OpenOrder {
 }
 
 class Receipt {
-  final int id;
+  final int id; // ko'rsatiladigan chek raqami («Чек №N») — UNIKAL EMAS!
   String time;
   String waiter;
   int sum;
@@ -230,6 +273,24 @@ class Receipt {
   int profit;
   String status; // Закрыт | Возврат
   DateTime? createdAt; // server vaqti (restartda statistikani tiklash uchun)
+
+  /// Firestore hujjat kaliti (auto-ID). `id` endi faqat ko'rsatish uchun:
+  /// ikki qurilma bir vaqtda sotsa `id` to'qnashishi mumkin, lekin docId har xil —
+  /// savdo ustma-ust yozilib yo'qolmaydi. Eski cheklar (docId = raqam) listener'da
+  /// to'ldiriladi; faqat hali serverga yozilmagan yangi chekda null bo'ladi.
+  String? docId;
+
+  /// To'lov qismlari (№7, HOLAT-17): aralash to'lovda statistika to'g'ri
+  /// taqsimlansin. `null` = eski chek (qismlar yozilmagan) — recompute label
+  /// bo'yicha eski evristikaga tushadi.
+  int? payCash;  // naqd (qaytim ayrilgan sof summa)
+  int? payCard;  // karta (+sertifikat)
+  int? payBonus;
+  int? payDebt;
+  /// Y-4: vozvratni TO'LIQ teskari qilish uchun sotuvda saqlanadi.
+  int? clientId;        // mijoz (bonus/totalSpent/debt teskarisi uchun)
+  int? bonusEarned;     // xariddan berilgan bonus (vozvratда bekor qilinadi)
+  List<Map<String, dynamic>>? stockConsumed; // [{'id':int,'amt':num}] — sklad qaytishi
   Receipt({
     required this.id,
     required this.time,
@@ -240,6 +301,14 @@ class Receipt {
     required this.profit,
     this.status = 'Закрыт',
     this.createdAt,
+    this.docId,
+    this.payCash,
+    this.payCard,
+    this.payBonus,
+    this.payDebt,
+    this.clientId,
+    this.bonusEarned,
+    this.stockConsumed,
   });
 }
 
@@ -277,7 +346,11 @@ class RestTable {
   int hallId;
   String name;   // «Стол 1» yoki «VIP-1»
   int seats;     // necha kishilik o'rin
-  RestTable({required this.id, required this.hallId, required this.name, this.seats = 4});
+  /// Soatlik ijara tarifi (sum/soat, 0 = oddiy stol). Windows POS yozadi —
+  /// bu yerda ham saqlanishi shart, aks holda android'da stolni tahrirlash
+  /// tarifni o'chirib yuboradi.
+  int hourlyRate;
+  RestTable({required this.id, required this.hallId, required this.name, this.seats = 4, this.hourlyRate = 0});
 }
 
 /// Kafe (заведение) — multi-tenant birlik (BACKEND-TAYYORGARLIK.md §12).
@@ -319,6 +392,49 @@ class Cafe {
   });
   bool get billingActive =>
       subscriptionStatus == 'active' || subscriptionStatus == 'trial';
+}
+
+/// Kassa smenasi (HOLAT-17: xposterwin'dan ko'chirildi — sxema BIR XIL bo'lishi
+/// SHART, BACKEND.md Qoida 2). `cafes/{id}/shifts/{id}` hujjati.
+class Shift {
+  final int id;
+  final DateTime openedAt;
+  final String openedBy;
+  final int openingCash; // smena ochilgandagi yashiq qoldig'i
+
+  DateTime? closedAt;
+  String? closedBy;
+  int countedCash = 0;  // yopishda sanab chiqilgan naqd (fakt)
+  int expectedCash = 0; // yopishda kutilgan naqd (hisob)
+
+  // Smena davomida yig'iladigan ko'rsatkichlar
+  int revenue = 0;
+  int profit = 0;
+  int checks = 0;
+  int cash = 0;   // naqd qabul qilingan (qaytim ayrilgan)
+  int card = 0;
+  int bonus = 0;
+  int debt = 0;       // qarzga sotilgan
+  int debtRepaid = 0; // qarz qaytarilgan (naqd kirim)
+
+  Shift({
+    required this.id,
+    required this.openedAt,
+    required this.openedBy,
+    required this.openingCash,
+  });
+
+  bool get isOpen => closedAt == null;
+  int get diff => countedCash - expectedCash;
+  int get avgCheck => checks > 0 ? (revenue / checks).round() : 0;
+
+  /// «3 ч 15 мин» — smena davomiyligi.
+  String durationLabel([DateTime? now]) {
+    final end = closedAt ?? now ?? DateTime.now();
+    final m = end.difference(openedAt).inMinutes;
+    final h = m ~/ 60;
+    return h > 0 ? '$h ч ${m % 60} мин' : '$m мин';
+  }
 }
 
 /// Rol identifikatorlari va RBAC yordamchilari.

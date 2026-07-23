@@ -43,7 +43,7 @@ class _LoginScreenState extends State<LoginScreen> {
     super.initState();
     // Kassa qulflangan (Firebase sessiya bor) — PIN ekrani bilan boshlaymiz.
     final app = context.read<AppState>();
-    if (app.isLocked && app.employees.any((e) => e.pin.isNotEmpty)) _view = 'pin';
+    if (app.isLocked && app.employees.any((e) => e.hasPin)) _view = 'pin';
   }
 
   @override
@@ -221,7 +221,7 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
       const SizedBox(height: 10),
       PrimaryButton('Войти', icon: Icons.login, busy: app.authBusy, onPressed: _doLogin),
-      if (app.isLocked && app.employees.any((e) => e.pin.isNotEmpty)) ...[
+      if (app.isLocked && app.employees.any((e) => e.hasPin)) ...[
         const SizedBox(height: 10),
         SecondaryButton('Войти по PIN', icon: Icons.dialpad, expand: true, onPressed: () => setState(() => _view = 'pin')),
       ],

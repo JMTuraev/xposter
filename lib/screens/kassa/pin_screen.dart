@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../theme.dart';
@@ -18,6 +19,16 @@ class _PinScreenState extends State<PinScreen> with SingleTickerProviderStateMix
   bool _error = false;
   late final AnimationController _shake;
 
+  // M1: brute-force sekinlashtirish — 5 xatodan keyin eksponensial kechikish.
+  // Eslatma: bu FAQAT UI orqali urinishni to'sadi. pinHash hali har xodimga
+  // o'qiladi, shuning uchun OFFLINE hujum qoladi — to'liq yechim PIN tekshiruvini
+  // Cloud Function'ga ko'chirish (audit KR-5/M1).
+  static int _failCount = 0;
+  static DateTime? _lockUntil;
+  Timer? _lockTimer;
+  bool get _locked => _lockUntil != null && DateTime.now().isBefore(_lockUntil!);
+  int get _lockLeft => _locked ? _lockUntil!.difference(DateTime.now()).inSeconds + 1 : 0;
+
   @override
   void initState() {
     super.initState();
@@ -26,12 +37,13 @@ class _PinScreenState extends State<PinScreen> with SingleTickerProviderStateMix
 
   @override
   void dispose() {
+    _lockTimer?.cancel();
     _shake.dispose();
     super.dispose();
   }
 
   void _press(String d) {
-    if (_error || _pin.length >= 4) return;
+    if (_error || _locked || _pin.length >= 4) return;
     setState(() => _pin += d);
     if (_pin.length == 4) {
       Future.delayed(const Duration(milliseconds: 180), _submit);
@@ -41,15 +53,36 @@ class _PinScreenState extends State<PinScreen> with SingleTickerProviderStateMix
   void _del() => setState(() => _pin = _pin.isEmpty ? _pin : _pin.substring(0, _pin.length - 1));
 
   void _submit() {
+    if (_locked) { setState(() => _pin = ''); return; }
     final name = widget.ctrl.tryLogin(_pin);
     if (name == null) {
+      _failCount++;
+      if (_failCount >= 5) {
+        // 5,10,20,40,... soniya (maks 5 daqiqa).
+        final n = (_failCount - 5).clamp(0, 6);
+        final secs = (5 * (1 << n)).clamp(5, 300);
+        _lockUntil = DateTime.now().add(Duration(seconds: secs));
+        _startLockTimer();
+      }
       setState(() => _error = true);
       _shake.forward(from: 0);
       Future.delayed(const Duration(milliseconds: 550), () {
         if (mounted) setState(() { _pin = ''; _error = false; });
       });
+    } else {
+      _failCount = 0;
+      _lockUntil = null;
+      _lockTimer?.cancel();
     }
     // muvaffaqiyatli bo'lsa — controller notifyListeners → ota-ekran chek ekraniga o'tadi
+  }
+
+  void _startLockTimer() {
+    _lockTimer?.cancel();
+    _lockTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!_locked) t.cancel();
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -102,6 +135,12 @@ class _PinScreenState extends State<PinScreen> with SingleTickerProviderStateMix
                         }),
                       ),
                     ),
+                    if (_locked) ...[
+                      const SizedBox(height: 14),
+                      Text('Слишком много попыток. Подождите $_lockLeft с',
+                          textAlign: TextAlign.center,
+                          style: AppTheme.sans(size: 13, weight: FontWeight.w600, color: AppColors.danger)),
+                    ],
                     const SizedBox(height: 22),
                     _Keypad(onDigit: _press, onDelete: _del, onKeyboard: () => showToast(context, 'Внешняя клавиатура не подключена', color: AppColors.textSecondary, bg: AppColors.bgSecondary, icon: Icons.keyboard_outlined)),
                   ],

@@ -320,7 +320,9 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                     children: [
                       const TextSpan(text: 'PIN '),
                       TextSpan(
-                        text: revealed ? e.pin : '••••',
+                        // Hash'langan PIN'ni ko'rsatib bo'lmaydi (ochiq matn saqlanmaydi) —
+                        // faqat legacy (hali migratsiya qilinmagan) hujjatda ko'rinadi.
+                        text: revealed ? (e.pin.isNotEmpty ? e.pin : 'задан · скрыт') : '••••',
                         style: AppTheme.sans(size: 11.5, weight: FontWeight.w700, color: AppColors.textSecondary, letterSpacing: 1.1),
                       ),
                     ],
@@ -421,11 +423,15 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                   return;
                 }
                 final pin = pinC.text;
-                final dup = app.employees.any((x) => x.pin == pin && x.uid != existing?.uid);
-                if (!RegExp(r'^\d{4}$').hasMatch(pin) || dup) {
-                  setS(() => pinErr = true);
-                  showToast(ctx, 'PIN — 4 цифры, уникальный для каждого', color: AppColors.warning, bg: AppColors.warningSoft, icon: Icons.warning_amber_rounded);
-                  return;
+                // Hash rejimida maydon bo'sh = «PIN o'zgarmasin» (eski hash qoladi).
+                final keepOldPin = pin.isEmpty && existing != null && existing.hasPin;
+                if (!keepOldPin) {
+                  final dup = app.employees.any((x) => x.matchesPin(pin) && x.uid != existing?.uid);
+                  if (!RegExp(r'^\d{4}$').hasMatch(pin) || dup) {
+                    setS(() => pinErr = true);
+                    showToast(ctx, 'PIN — 4 цифры, уникальный для каждого', color: AppColors.warning, bg: AppColors.warningSoft, icon: Icons.warning_amber_rounded);
+                    return;
+                  }
                 }
                 final login = loginC.text.trim();
                 if (existing != null) {
@@ -433,7 +439,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
                   existing.name = name;
                   existing.phone = phoneC.text.trim();
                   existing.login = login;
-                  existing.pin = pin;
+                  if (!keepOldPin) existing.setPin(pin); // salt+hash, ochiq matn tozalanadi
                   existing.role = role;
                   if (app.repo.ready) app.repo.saveEmployee(existing);
                   app.notify();

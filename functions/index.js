@@ -65,15 +65,30 @@ async function assertManager(cafeId, uid) {
   throw new HttpsError("permission-denied", "Faqat egasi yoki menejer.");
 }
 
+// O-8: ruxsat etilgan xodim rollari (allowlist). 'Владелец' — bu xodim roli
+// emas (owner faqat ownerUid orqali aniqlanadi), shuning uchun ro'yxatda yo'q.
+const ALLOWED_ROLES = [
+  "Управляющий", "Администратор зала", "Официант", "Повар", "Маркетолог",
+];
+
 // ─────────────────── §12.4: Xodim boshqaruvi ───────────────────
 
-/** Owner yangi xodim yaratadi (Auth user + Firestore doc). */
+/** Owner yangi xodim yaratadi (Auth user + Firestore doc).
+ *  HOLAT-16: PIN ochiq matnda saqlanmaydi — client `pinHash`/`pinSalt`
+ *  yuboradi (lib/utils/pin_hash.dart bilan bir xil sxema). Eski client
+ *  yuborgan `pin` (ochiq matn) legacy sifatida qabul qilinadi. */
 exports.createEmployee = onCall(async (request) => {
   const uid = requireAuth(request);
-  const { cafeId, login, password, name, role, phone = "", pin = "" } = request.data || {};
+  const { cafeId, login, password, name, role, phone = "", pin = "",
+          pinHash = null, pinSalt = null } = request.data || {};
   await assertManager(cafeId, uid);
   if (!login || !password || password.length < 6) {
     throw new HttpsError("invalid-argument", "login va parol (≥6) kerak.");
+  }
+  // O-8: rol allowlist — menejer ixtiyoriy/yuqoriroq rol (masalan 'Владелец')
+  // yoki mavjud bo'lmagan satr bera olmasin.
+  if (role && !ALLOWED_ROLES.includes(role)) {
+    throw new HttpsError("invalid-argument", "Noto'g'ri rol.");
   }
   const email = employeeEmail(login, cafeId);
   const user = await getAuth().createUser({ email, password, displayName: name });
@@ -90,7 +105,9 @@ exports.createEmployee = onCall(async (request) => {
     uid: user.uid,
     name: name || login,
     role: role || "Официант",
-    pin: pin || "",
+    pin: pinHash ? "" : (pin || ""), // hash bo'lsa ochiq matn yozilmaydi
+    pinSalt: pinSalt || null,
+    pinHash: pinHash || null,
     phone,
     login,
     active: true,
@@ -108,6 +125,12 @@ exports.setEmployeeActive = onCall(async (request) => {
   const { cafeId, uid, active } = request.data || {};
   await assertManager(cafeId, callerUid);
   if (!uid) throw new HttpsError("invalid-argument", "uid kerak.");
+  // Y-3: egani (owner) bloklab bo'lmaydi — deleteEmployee'dagi kabi himoya.
+  // Aks holda rogue menejer owner Auth'ini disabled qilib boshqaruvni tortib olardi.
+  const cafeSnap = await db.doc(`cafes/${cafeId}`).get();
+  if (cafeSnap.get("ownerUid") === uid) {
+    throw new HttpsError("failed-precondition", "Egani bloklab bo'lmaydi.");
+  }
   await getAuth().updateUser(uid, { disabled: !active });
   await db.doc(`cafes/${cafeId}/employees/${uid}`).update({ active: !!active });
   return { ok: true };
@@ -126,6 +149,55 @@ exports.deleteEmployee = onCall(async (request) => {
   await getAuth().deleteUser(uid).catch(() => {});
   await db.doc(`cafes/${cafeId}/employees/${uid}`).delete();
   return { ok: true };
+});
+
+// ─────────────────── Google Play: "Удалить аккаунт" (o'z akkauntini o'chirish) ───────────────────
+
+/**
+ * Foydalanuvchi O'Z akkauntini butunlay o'chiradi (Google Play "Account
+ * deletion" talabi: play.google.com/console → User data). Reauth kerak emas —
+ * chaqiruvchi allaqachon login qilgan va faqat O'ZINI o'chiradi.
+ *
+ * Owner  → egalik qilgan BARCHA kafelar (subkolleksiyalari bilan), ulardagi
+ *          xodimlarning Auth userlari, cafeCodes, owners/{uid} va owner Auth.
+ * Xodim → faqat o'z employees hujjati + o'z Auth user'i.
+ * Barcha Firestore ma'lumot (cheklar, tranzaksiyalar, mijozlar, sklad...)
+ * kafe bilan birga rekursiv o'chadi — hech qanday shaxsiy ma'lumot qolmaydi.
+ */
+exports.deleteAccount = onCall(async (request) => {
+  const uid = requireAuth(request);
+
+  const ownerSnap = await db.doc(`owners/${uid}`).get();
+  if (ownerSnap.exists) {
+    const cafesSnap = await db.collection("cafes").where("ownerUid", "==", uid).get();
+    for (const cafeDoc of cafesSnap.docs) {
+      const cafeId = cafeDoc.id;
+      // 1) Xodimlarning Auth userlari (owner'ning o'zidan tashqari).
+      const empsSnap = await db.collection(`cafes/${cafeId}/employees`).get();
+      for (const emp of empsSnap.docs) {
+        if (emp.id === uid) continue;
+        await getAuth().deleteUser(emp.id).catch(() => {});
+      }
+      // 2) cafeCodes yozuvlari (kod → cafeId).
+      const codesSnap = await db.collection("cafeCodes").where("cafeId", "==", cafeId).get();
+      for (const codeDoc of codesSnap.docs) {
+        await codeDoc.ref.delete().catch(() => {});
+      }
+      // 3) Kafe hujjati + BARCHA subkolleksiyalar (rekursiv).
+      await db.recursiveDelete(cafeDoc.ref);
+    }
+    await db.doc(`owners/${uid}`).delete().catch(() => {});
+    await getAuth().deleteUser(uid).catch(() => {}); // oxirida — o'zini
+    return { ok: true, scope: "owner" };
+  }
+
+  // Xodim: o'z yozuvi (uid = docId) + Auth.
+  const empQ = await db.collectionGroup("employees").where("uid", "==", uid).limit(1).get();
+  if (!empQ.empty) {
+    await empQ.docs[0].ref.delete().catch(() => {});
+  }
+  await getAuth().deleteUser(uid).catch(() => {});
+  return { ok: true, scope: "employee" };
 });
 
 // ─────────────────── §5: Atomik to'lov (server-authoritative) ───────────────────
@@ -150,6 +222,10 @@ exports.completePayment = onCall(async (request) => {
   if (!memberSnap.exists && !isOwner) {
     throw new HttpsError("permission-denied", "Bu kafega ruxsat yo'q.");
   }
+  // Y-12: bu CF klientda ISHLATILMAYDI (klient WriteBatch qiladi) va idempotent
+  // emas. Har a'zoga ochiq qoldirmaslik uchun faqat owner/menejerga cheklaymiz —
+  // to'liq olib tashlash yoki idempotency kaliti bilan qayta yozish tavsiya etiladi.
+  await assertManager(cafeId, uid);
 
   const c = `cafes/${cafeId}`;
   await db.runTransaction(async (tx) => {
@@ -205,12 +281,18 @@ exports.completePayment = onCall(async (request) => {
 exports.dailyAggregate = onSchedule(
   { schedule: "every day 00:10", timeZone: "Asia/Samarkand" },
   async () => {
-    const now = new Date();
-    const start = new Date(now); start.setDate(start.getDate() - 1); start.setHours(0, 0, 0, 0);
-    const end = new Date(start); end.setDate(end.getDate() + 1);
-    const dateKey = start.toISOString().slice(0, 10);
-    const startTs = Timestamp.fromDate(start);
-    const endTs = Timestamp.fromDate(end);
+    // O-6: sana/soatni Asia/Samarkand (UTC+5, DST yo'q) bo'yicha hisoblaymiz —
+    // CF runtime UTC'da ishlaydi, aks holda kun oynasi 5 soat siljib, ertalabki
+    // savdo oldingi kunga tushardi.
+    const OFFSET = 5 * 3600 * 1000;
+    const nowTk = new Date(Date.now() + OFFSET); // Tashkent "devor soati" (UTC metodlari bilan)
+    // Kechagi Tashkent kuni [00:00, 24:00):
+    const startTk = new Date(Date.UTC(nowTk.getUTCFullYear(), nowTk.getUTCMonth(), nowTk.getUTCDate() - 1, 0, 0, 0));
+    const endTk = new Date(startTk.getTime() + 24 * 3600 * 1000);
+    const dateKey = startTk.toISOString().slice(0, 10); // Tashkent sanasi (YYYY-MM-DD)
+    // Firestore so'rovi haqiqiy UTC oynasida = Tashkent vaqti − offset.
+    const startTs = Timestamp.fromDate(new Date(startTk.getTime() - OFFSET));
+    const endTs = Timestamp.fromDate(new Date(endTk.getTime() - OFFSET));
 
     const cafes = await db.collection("cafes").get();
     for (const cafe of cafes.docs) {
@@ -230,7 +312,8 @@ exports.dailyAggregate = onSchedule(
         profit += r.get("profit") || 0;
         checks += 1;
         const ts = r.get("createdAt");
-        if (ts && ts.toDate) byHour[ts.toDate().getHours()] += sum;
+        // O-6: Tashkent soati (UTC+5).
+        if (ts && ts.toDate) byHour[new Date(ts.toDate().getTime() + OFFSET).getUTCHours()] += sum;
         const pay = String(r.get("payment") || "");
         if (pay.includes("Налич")) paymentMethods["Наличные"] += sum;
         else if (pay.includes("Карт")) paymentMethods["Карточка"] += sum;

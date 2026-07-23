@@ -109,7 +109,14 @@ class _PaymentScreenState extends State<PaymentScreen> with SingleTickerProvider
 
   void _clear(String m) => setState(() => _parts[m] = 0);
 
+  /// To'lov bir marta bajarilsin (Windows'dagi bilan bir xil himoya — HOLAT-16
+  /// auditi topgan asimmetriya). Ikki marta tez bosilsa completePayment chekni
+  /// `checks` dan olib tashlaganidan keyin `active` KEYINGI ochiq chekka ishora
+  /// qiladi — ikkinchi chaqiruv begunoh chekni «to'langan» qilib yuborardi.
+  bool _submitting = false;
+
   void _submit() {
+    if (_submitting) return;
     if (_paid == 0) {
       _shake.forward(from: 0);
       return;
@@ -119,6 +126,7 @@ class _PaymentScreenState extends State<PaymentScreen> with SingleTickerProvider
       showToast(context, 'Осталось внести ${sum(_due - _paid)}', color: AppColors.warning, bg: AppColors.warningSoft, icon: Icons.warning_amber_rounded);
       return;
     }
+    _submitting = true; // shu nuqtadan keyin qaytish yo'q — chek arxivga ketadi
     final label = _paymentLabel();
     final doc = widget.ctrl.active;
     final svcPct = doc.serviceFeePctFor(widget.ctrl.app);
@@ -164,15 +172,26 @@ class _PaymentScreenState extends State<PaymentScreen> with SingleTickerProvider
       total: _due,
       paymentLabel: label,
     );
-    widget.ctrl.completePayment(
-      parts: Map<String, int>.from(_parts),
-      change: change,
-      paymentLabel: label,
-      subtotalAmt: _subtotal,
-      discountPctAmt: _discountPct,
-      discountAmt: _discount,
-      totalDue: _due,
-    );
+    try {
+      widget.ctrl.completePayment(
+        parts: Map<String, int>.from(_parts),
+        change: change,
+        paymentLabel: label,
+        subtotalAmt: _subtotal,
+        discountPctAmt: _discountPct,
+        discountAmt: _discount,
+        totalDue: _due,
+      );
+    } catch (e) {
+      // Kutilmagan xato — tugmani qulflab qoldirmaymiz, kassir qayta urina oladi.
+      _submitting = false;
+      debugPrint('completePayment xato: $e');
+      if (mounted) {
+        showToast(context, 'Не удалось провести оплату: $e',
+            color: AppColors.danger, bg: AppColors.dangerSoft, icon: Icons.error_outline);
+      }
+      return;
+    }
     Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ReceiptView(
       lines: snapshotLines,
       subtotal: _subtotal,

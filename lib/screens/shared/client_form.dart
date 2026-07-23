@@ -13,9 +13,11 @@ void showClientForm(BuildContext context, AppState app, {Client? existing, requi
   final discount = TextEditingController(text: existing != null ? _pct(app, existing.group).toString() : '5');
   final card = TextEditingController(text: existing?.card ?? '');
   final phone = TextEditingController(text: existing != null ? existing.phone.replaceAll('+998 ', '') : '');
-  final email = TextEditingController();
-  final comment = TextEditingController();
-  final address = TextEditingController();
+  // Y-1: tahrirda mavjud qiymatlar oldindan to'ldiriladi — aks holda saqlashda
+  // bo'sh controller `email/comment/address` ni null qilib o'chirib yuborardi.
+  final email = TextEditingController(text: existing?.email ?? '');
+  final comment = TextEditingController(text: existing?.comment ?? '');
+  final address = TextEditingController(text: existing?.address ?? '');
   final addr2 = TextEditingController();
   bool addr2On = false;
   String gender = 'М';
@@ -96,7 +98,9 @@ void showClientForm(BuildContext context, AppState app, {Client? existing, requi
             existing.email = tx(email);
             existing.comment = tx(comment);
             existing.address = [tx(address), tx(addr2)].where((e) => e != null).join(' · ').trim().isEmpty ? existing.address : [tx(address), tx(addr2)].where((e) => e != null).join(' · ');
-            app.notify();
+            // Y-1: Firestore'ga YOZISH (ilgari faqat app.notify() edi — tahrir
+            // keyingi snapshot/restartda server nusxasi bilan almashib yo'qolardi).
+            app.saveClient(existing);
             Navigator.pop(ctx);
             showToast(context, 'Клиент сохранён');
             onSaved(existing);

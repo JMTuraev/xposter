@@ -54,6 +54,23 @@ void showFunctionsSheet(BuildContext context, KassaController ctrl) {
             row('📸', 'Накладная с фото AI', top: true, onTap: () { Navigator.pop(ctx); showToast(context, 'Накладная с фото — установите Postie AI в «Приложениях»', color: AppColors.accentHover, bg: AppColors.accentSoft, icon: Icons.auto_awesome); }),
           ]),
           const SizedBox(height: 14),
+          // Y-10: Kassa smenasini ochish/yopish (ilgari Android'da UI umuman yo'q
+          // edi — Финансы «Функции → Открыть смену» ga yo'naltirardi, lekin tugma
+          // mavjud emasdi; smena hech qachon ochilmasdi, Z-otchet ishlamasdi).
+          group('Кассовая смена', [
+            if (ctrl.app.currentShift == null)
+              row('🟢', 'Открыть смену', top: false, onTap: () {
+                ctrl.app.openShift();
+                Navigator.pop(ctx);
+                showToast(context, 'Смена открыта', color: AppColors.success, bg: AppColors.bgSecondary, icon: Icons.play_circle_outline);
+              })
+            else
+              row('🔴', 'Закрыть смену (Z-отчёт)', color: AppColors.danger, top: false, onTap: () {
+                Navigator.pop(ctx);
+                _closeShiftDialog(context, ctrl);
+              }),
+          ]),
+          const SizedBox(height: 14),
           group('Оборудование', [
             row('🖨', 'Устройства (Wi-Fi принтер)', top: false, onTap: () { Navigator.pop(ctx); showPrinterPicker(context); }),
             row('💰', 'Открыть денежный ящик', top: true, onTap: () { Navigator.pop(ctx); showToast(context, 'Денежный ящик открыт'); }),
@@ -68,6 +85,51 @@ void showFunctionsSheet(BuildContext context, KassaController ctrl) {
         ]),
       );
     },
+  );
+}
+
+/// Y-10: Smenani yopish dialogi — fakt naqdni kiritib Z-otchet yaratadi.
+void _closeShiftDialog(BuildContext context, KassaController ctrl) {
+  final app = ctrl.app;
+  final ctl = TextEditingController(text: app.cashBoxBalance.toString());
+  showDialog(
+    context: context,
+    builder: (d) => AlertDialog(
+      backgroundColor: AppColors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text('Закрытие смены', style: AppTheme.serif(size: 18, weight: FontWeight.w700)),
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Ожидается в кассе: ${sum(app.cashBoxBalance)}', style: AppTheme.sans(size: 13, color: AppColors.textSecondary)),
+        const SizedBox(height: 12),
+        Text('ФАКТИЧЕСКИ ПОСЧИТАНО', style: AppTheme.sans(size: 11, weight: FontWeight.w700, color: AppColors.textTertiary, letterSpacing: 0.8)),
+        const SizedBox(height: 6),
+        TextField(
+          controller: ctl,
+          keyboardType: TextInputType.number,
+          style: AppTheme.sans(size: 15),
+          decoration: InputDecoration(
+            isDense: true, filled: true, fillColor: AppColors.bgSecondary,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.btn), borderSide: const BorderSide(color: AppColors.borderStrong)),
+          ),
+        ),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(d), child: Text('Отмена', style: AppTheme.sans(color: AppColors.textSecondary))),
+        TextButton(
+          onPressed: () {
+            final counted = int.tryParse(ctl.text.replaceAll(RegExp(r'[^0-9-]'), '')) ?? app.cashBoxBalance;
+            final s = app.closeShift(counted: counted);
+            Navigator.pop(d);
+            if (s != null) {
+              final diff = s.diff;
+              showToast(context, diff == 0 ? 'Смена закрыта — расхождений нет' : 'Смена закрыта. Расхождение: ${sum(diff)}',
+                  color: diff == 0 ? AppColors.success : AppColors.danger, bg: AppColors.bgSecondary, icon: Icons.check_circle_outline);
+            }
+          },
+          child: Text('Закрыть смену', style: AppTheme.sans(weight: FontWeight.w700, color: AppColors.danger)),
+        ),
+      ],
+    ),
   );
 }
 

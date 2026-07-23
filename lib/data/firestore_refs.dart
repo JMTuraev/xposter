@@ -37,11 +37,17 @@ class Db {
   CollectionReference<Map<String, dynamic>> accounts(String c) => sub(c, 'accounts');
   CollectionReference<Map<String, dynamic>> transactions(String c) => sub(c, 'transactions');
   CollectionReference<Map<String, dynamic>> receipts(String c) => sub(c, 'receipts');
+  /// Ochiq (hali to'lanmagan) cheklar — stollardagi buyurtmalar restart/qulash/
+  /// boshqa qurilmada ham ko'rinishi uchun (RAM'da emas).
+  CollectionReference<Map<String, dynamic>> openChecks(String c) => sub(c, 'openChecks');
+  /// «Закрыть без оплаты» audit jurnali (№5) — o'zgarmas (rules: faqat create).
+  CollectionReference<Map<String, dynamic>> voidedChecks(String c) => sub(c, 'voidedChecks');
   CollectionReference<Map<String, dynamic>> supplies(String c) => sub(c, 'supplies');
   CollectionReference<Map<String, dynamic>> wastes(String c) => sub(c, 'wastes');
   CollectionReference<Map<String, dynamic>> inventories(String c) => sub(c, 'inventories');
   CollectionReference<Map<String, dynamic>> processings(String c) => sub(c, 'processings');
   CollectionReference<Map<String, dynamic>> promotions(String c) => sub(c, 'promotions');
+  CollectionReference<Map<String, dynamic>> shifts(String c) => sub(c, 'shifts');
   CollectionReference<Map<String, dynamic>> halls(String c) => sub(c, 'halls');
   CollectionReference<Map<String, dynamic>> tables(String c) => sub(c, 'tables');
   CollectionReference<Map<String, dynamic>> storages(String c) => sub(c, 'storages');

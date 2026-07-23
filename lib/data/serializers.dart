@@ -43,6 +43,7 @@ Map<String, dynamic> productToMap(Product p) => {
       'recipe': p.recipe?.map(recipeItemToMap).toList(),
       'noDiscount': p.noDiscount,
       'byWeight': p.byWeight,
+      'barcode': p.barcode,
     };
 
 Product productFromMap(Map<String, dynamic> m) => Product(
@@ -63,6 +64,8 @@ Product productFromMap(Map<String, dynamic> m) => Product(
           .toList(),
       noDiscount: m['noDiscount'] as bool? ?? false,
       byWeight: m['byWeight'] as bool? ?? false,
+      // Windows kassa (xposterwin) yozadigan maydon — android uni saqlab qoladi.
+      barcode: (m['barcode'] as String?)?.trim().isEmpty ?? true ? null : (m['barcode'] as String).trim(),
     );
 
 // ── Ingredient ──
@@ -104,11 +107,17 @@ Supplier supplierFromMap(Map<String, dynamic> m) => Supplier(
     );
 
 // ── Employee ──
+// DIQQAT (HOLAT-16): PIN ochiq matnda YOZILMAYDI. Hash o'rnatilgan xodimda
+// 'pin' doim '' bo'lib yoziladi; legacy (hali migratsiya qilinmagan) hujjatda
+// pinHash yo'q bo'lsa eski ochiq matn saqlanib qoladi — tahrirlashda
+// setPin() uni hash'ga o'tkazadi.
 Map<String, dynamic> employeeToMap(Employee e) => {
       'id': e.id,
       'name': e.name,
       'role': e.role,
-      'pin': e.pin,
+      'pin': (e.pinHash != null && e.pinHash!.isNotEmpty) ? '' : e.pin,
+      'pinSalt': e.pinSalt,
+      'pinHash': e.pinHash,
       'phone': e.phone,
       'login': e.login,
       'lastLogin': e.lastLogin,
@@ -130,6 +139,8 @@ Employee employeeFromMap(Map<String, dynamic> m) => Employee(
       checks: (m['checks'] as num?)?.toInt() ?? 0,
       uid: m['uid'] as String?,
       active: m['active'] as bool? ?? true,
+      pinSalt: m['pinSalt'] as String?,
+      pinHash: m['pinHash'] as String?,
     );
 
 // ── ClientGroup ──
@@ -156,6 +167,7 @@ Map<String, dynamic> clientToMap(Client c) => {
       'email': c.email,
       'comment': c.comment,
       'address': c.address,
+      'debt': c.debt, // xposterwin bilan umumiy maydon (BACKEND.md Qoida 2)
     };
 
 Client clientFromMap(Map<String, dynamic> m) => Client(
@@ -171,6 +183,7 @@ Client clientFromMap(Map<String, dynamic> m) => Client(
       email: m['email'] as String?,
       comment: m['comment'] as String?,
       address: m['address'] as String?,
+      debt: (m['debt'] as num?)?.toInt() ?? 0,
     );
 
 // ── Account ──
@@ -213,6 +226,15 @@ Map<String, dynamic> receiptToMap(Receipt r) => {
       'items': r.items,
       'profit': r.profit,
       'status': r.status,
+      // To'lov qismlari (№7) — aralash to'lov statistikasi uchun.
+      'payCash': r.payCash,
+      'payCard': r.payCard,
+      'payBonus': r.payBonus,
+      'payDebt': r.payDebt,
+      // Y-4: vozvratni to'liq teskari qilish uchun.
+      'clientId': r.clientId,
+      'bonusEarned': r.bonusEarned,
+      'stockConsumed': r.stockConsumed,
     };
 Receipt receiptFromMap(Map<String, dynamic> m) => Receipt(
       id: (m['id'] as num).toInt(),
@@ -224,7 +246,58 @@ Receipt receiptFromMap(Map<String, dynamic> m) => Receipt(
       profit: (m['profit'] as num?)?.toInt() ?? 0,
       status: m['status'] as String? ?? 'Закрыт',
       createdAt: (m['createdAt'] as Timestamp?)?.toDate(),
+      payCash: (m['payCash'] as num?)?.toInt(),
+      payCard: (m['payCard'] as num?)?.toInt(),
+      payBonus: (m['payBonus'] as num?)?.toInt(),
+      payDebt: (m['payDebt'] as num?)?.toInt(),
+      clientId: (m['clientId'] as num?)?.toInt(),
+      bonusEarned: (m['bonusEarned'] as num?)?.toInt(),
+      stockConsumed: (m['stockConsumed'] as List?)
+          ?.map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(),
     );
+
+// ── Shift (kassa smenasi) ── (HOLAT-17: xposterwin bilan AYNAN bir xil)
+Map<String, dynamic> shiftToMap(Shift s) => {
+      'id': s.id,
+      'openedAt': s.openedAt.toIso8601String(),
+      'openedBy': s.openedBy,
+      'openingCash': s.openingCash,
+      'closedAt': s.closedAt?.toIso8601String(),
+      'closedBy': s.closedBy,
+      'countedCash': s.countedCash,
+      'expectedCash': s.expectedCash,
+      'revenue': s.revenue,
+      'profit': s.profit,
+      'checks': s.checks,
+      'cash': s.cash,
+      'card': s.card,
+      'bonus': s.bonus,
+      'debt': s.debt,
+      'debtRepaid': s.debtRepaid,
+    };
+
+Shift shiftFromMap(Map<String, dynamic> m) {
+  final s = Shift(
+    id: (m['id'] as num?)?.toInt() ?? 1,
+    openedAt: DateTime.tryParse(m['openedAt'] as String? ?? '') ?? DateTime.now(),
+    openedBy: m['openedBy'] as String? ?? '',
+    openingCash: (m['openingCash'] as num?)?.toInt() ?? 0,
+  );
+  s.closedAt = DateTime.tryParse(m['closedAt'] as String? ?? '');
+  s.closedBy = m['closedBy'] as String?;
+  s.countedCash = (m['countedCash'] as num?)?.toInt() ?? 0;
+  s.expectedCash = (m['expectedCash'] as num?)?.toInt() ?? 0;
+  s.revenue = (m['revenue'] as num?)?.toInt() ?? 0;
+  s.profit = (m['profit'] as num?)?.toInt() ?? 0;
+  s.checks = (m['checks'] as num?)?.toInt() ?? 0;
+  s.cash = (m['cash'] as num?)?.toInt() ?? 0;
+  s.card = (m['card'] as num?)?.toInt() ?? 0;
+  s.bonus = (m['bonus'] as num?)?.toInt() ?? 0;
+  s.debt = (m['debt'] as num?)?.toInt() ?? 0;
+  s.debtRepaid = (m['debtRepaid'] as num?)?.toInt() ?? 0;
+  return s;
+}
 
 // ── Supply ──
 Map<String, dynamic> supplyToMap(Supply s) => {
@@ -254,12 +327,13 @@ Hall hallFromMap(Map<String, dynamic> m) =>
     Hall(id: (m['id'] as num).toInt(), name: m['name'] as String? ?? '');
 
 Map<String, dynamic> tableToMap(RestTable t) =>
-    {'id': t.id, 'hallId': t.hallId, 'name': t.name, 'seats': t.seats};
+    {'id': t.id, 'hallId': t.hallId, 'name': t.name, 'seats': t.seats, 'hourlyRate': t.hourlyRate};
 RestTable tableFromMap(Map<String, dynamic> m) => RestTable(
       id: (m['id'] as num).toInt(),
       hallId: (m['hallId'] as num?)?.toInt() ?? 0,
       name: m['name'] as String? ?? '',
       seats: (m['seats'] as num?)?.toInt() ?? 4,
+      hourlyRate: (m['hourlyRate'] as num?)?.toInt() ?? 0,
     );
 
 // ── Cafe (config doc) ──

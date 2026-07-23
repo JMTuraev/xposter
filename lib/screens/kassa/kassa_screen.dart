@@ -32,6 +32,15 @@ class _KassaScreenState extends State<KassaScreen> {
   int _hallId = 0; // tanlangan zal (0 → birinchisi)
 
   @override
+  void dispose() {
+    // MUHIM: ctrl AppState'ga listener qo'shadi va debounce-timer ushlab turadi.
+    // Dispose qilinmasa eski ctrl logout'dan keyin ham yangi kafening
+    // openChecks'iga eski cheklarni yozib yuborishi mumkin edi.
+    _ctrl?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     _ctrl ??= KassaController(app);

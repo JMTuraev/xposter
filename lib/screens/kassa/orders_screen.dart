@@ -366,47 +366,16 @@ class _OrdersScreenState extends State<OrdersScreen> {
             onTap: () {
               Navigator.pop(ctx);
               final app = widget.ctrl.app;
-              app.salesToday['revenue'] = (app.salesToday['revenue'] as int) - r.sum;
-              app.salesToday['profit'] = (app.salesToday['profit'] as int) - r.profit;
-              app.salesToday['checks'] = (app.salesToday['checks'] as int) - 1;
-              // To'lov usuli / kassa yashigi / kassir statistikasini teskari (yaxlitlik)
-              if (r.payment.contains('Налич')) {
-                app.paymentMethods['Наличные'] = (app.paymentMethods['Наличные'] ?? 0) - r.sum;
-                final box = app.accounts.where((a) => a.name == 'Денежный ящик').toList();
-                if (box.isNotEmpty) {
-                  box.first.balance -= r.sum;
-                  if (app.repo.ready) app.repo.saveAccount(box.first);
-                }
-              } else if (r.payment.contains('Карт') || r.payment.contains('Сертиф')) {
-                app.paymentMethods['Карточка'] = (app.paymentMethods['Карточка'] ?? 0) - r.sum;
-              }
-              final emp = app.employees.where((e) => e.name == r.waiter).toList();
-              if (emp.isNotEmpty) {
-                emp.first.revenue -= r.sum;
-                emp.first.checks -= 1;
-                if (app.repo.ready) app.repo.saveEmployee(emp.first);
-              }
-              // Grafik/vaqt qatorlarini ham teskari (completePayment bilan simmetrik)
-              int dec(int cur) => (cur - r.sum) < 0 ? 0 : cur - r.sum;
-              final rh = int.tryParse(r.time.split(':').first) ?? DateTime.now().hour;
-              if (rh >= 0 && rh < 24) app.byHour[rh] = dec(app.byHour[rh]);
-              const wk = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-              final wkKey = wk[(DateTime.now().weekday - 1).clamp(0, 6).toInt()];
-              app.byWeekday[wkKey] = dec(app.byWeekday[wkKey] ?? 0);
-              final dv = app.chartSeries['day']!['values'] as List<int>;
-              final di = (rh - 9).clamp(0, dv.length - 1).toInt();
-              dv[di] = dec(dv[di]);
-              final wv = app.chartSeries['week']!['values'] as List<int>;
-              wv[6] = dec(wv[6]);
-              final mv = app.chartSeries['month']!['values'] as List<int>;
-              mv[29] = dec(mv[29]);
-              // Средний чек — qayta hisoblansin
-              final ch = app.salesToday['checks'] as int;
-              app.salesToday['avgCheck'] = ch > 0 ? ((app.salesToday['revenue'] as int) / ch).round() : 0;
+              // Y-4/Y-6: chekni TO'LIQ teskari — statistika, kassa yashigi
+              // (payCash), kassir, smena, mijoz bonus/totalSpent/debt va SKLAD
+              // qoldig'i. Ilgari sklad/bonus/qarz qaytmasdi (M5).
+              app.refundSale(r);
               // Arxivda statusni «Возврат» ga o'zgartirish (+ Firestore write-through)
               final idx = app.receiptsArchive.indexWhere((x) => identical(x, r));
               if (idx >= 0) {
-                final refunded = Receipt(id: r.id, time: r.time, waiter: r.waiter, sum: r.sum, payment: r.payment, items: r.items, profit: r.profit, status: 'Возврат', createdAt: r.createdAt);
+                // docId SHART: usiz saveReceipt yangi auto-ID hujjat ochib,
+                // arxivda chek ikkilanib qolardi (asli «Закрыт» + nusxa «Возврат»).
+                final refunded = Receipt(id: r.id, time: r.time, waiter: r.waiter, sum: r.sum, payment: r.payment, items: r.items, profit: r.profit, status: 'Возврат', createdAt: r.createdAt, docId: r.docId, payCash: r.payCash, payCard: r.payCard, payBonus: r.payBonus, payDebt: r.payDebt, clientId: r.clientId, bonusEarned: r.bonusEarned, stockConsumed: r.stockConsumed);
                 app.receiptsArchive[idx] = refunded;
                 app.saveReceipt(refunded);
               }

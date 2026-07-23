@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
+import '../models.dart';
 import '../state/app_state.dart';
 import '../widgets/ui.dart';
 import 'stats/stats_screen.dart';
@@ -84,11 +85,70 @@ class MoreScreen extends StatelessWidget {
             child: Text('Выйти', style: AppTheme.sans(size: 14.5, weight: FontWeight.w600, color: AppColors.danger)),
           ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
+
+        // ── Удалить аккаунт (Google Play talabi: o'z akkauntini o'chirish) ──
+        Center(
+          child: TextButton(
+            onPressed: () => _deleteAccount(context, app),
+            child: Text('Удалить аккаунт',
+                style: AppTheme.sans(size: 13, weight: FontWeight.w600, color: AppColors.textTertiary)),
+          ),
+        ),
+        const SizedBox(height: 6),
         // DIQQAT: pubspec.yaml dagi `version:` bilan bir xil bo'lsin.
-        Center(child: Text('Xposter · v1.0.3', style: AppTheme.sans(size: 11.5, color: AppColors.textTertiary))),
+        Center(child: Text('Xposter · v1.0.6', style: AppTheme.sans(size: 11.5, color: AppColors.textTertiary))),
       ],
     );
+  }
+
+  /// Google Play "Account deletion" talabi: foydalanuvchi o'z akkauntini
+  /// ilova ichida o'chira oladi. Owner uchun — butun kafe va barcha ma'lumot
+  /// (qaytarib bo'lmaydi), shuning uchun «УДАЛИТЬ» so'zini yozib tasdiqlaydi.
+  void _deleteAccount(BuildContext context, AppState app) {
+    final isOwner = app.currentUser.role == Roles.owner;
+    final confirm = TextEditingController();
+    showAppSheet(context, title: 'Удалить аккаунт', builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setSt) {
+        final ok = !isOwner || confirm.text.trim().toUpperCase() == 'УДАЛИТЬ';
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Center(child: Text('⚠️', style: TextStyle(fontSize: 36))),
+          const SizedBox(height: 8),
+          Text(
+            isOwner
+                ? 'Аккаунт, заведение и ВСЕ данные (чеки, склад, сотрудники, клиенты, финансы) будут удалены безвозвратно.'
+                : 'Ваш аккаунт сотрудника и вход будут удалены безвозвратно.',
+            textAlign: TextAlign.center,
+            style: AppTheme.sans(size: 13.5, color: AppColors.textSecondary, height: 1.5),
+          ),
+          const SizedBox(height: 14),
+          if (isOwner) ...[
+            Text('Введите слово УДАЛИТЬ для подтверждения:',
+                style: AppTheme.sans(size: 12.5, color: AppColors.textTertiary)),
+            const SizedBox(height: 6),
+            LabeledField(label: 'Подтверждение', controller: confirm, hint: 'УДАЛИТЬ',
+                onChanged: (_) => setSt(() {})),
+            const SizedBox(height: 14),
+          ],
+          PrimaryButton('Удалить навсегда', color: AppColors.danger, busy: app.authBusy,
+              onPressed: ok
+                  ? () async {
+                      final err = await app.deleteAccount();
+                      if (!ctx.mounted) return;
+                      Navigator.pop(ctx);
+                      if (err != null) {
+                        showToast(context, err,
+                            color: AppColors.danger, bg: AppColors.dangerSoft, icon: Icons.error_outline);
+                      }
+                      // Muvaffaqiyatda AuthGate avtomatik Login ekraniga qaytaradi.
+                    }
+                  : null),
+          const SizedBox(height: 10),
+          SecondaryButton('Отмена', expand: true, onPressed: () => Navigator.pop(ctx)),
+          const SizedBox(height: 8),
+        ]);
+      },
+    ));
   }
 
   Widget _group(String title, List<_Row> rows, BuildContext context) {

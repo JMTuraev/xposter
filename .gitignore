@@ -134,3 +134,7 @@ logcat.bat
 no_lock.bat
 phone_screenshot.bat
 install_apk.bat
+
+# Maxfiy/vaqtinchalik Admin SDK skriptlari (audit)
+functions/_*.js
+_*.js

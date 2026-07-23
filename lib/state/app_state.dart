@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../models.dart';
 import '../services/auth_service.dart';
 import '../services/notification_service.dart';
 import '../data/repository.dart';
+import '../data/serializers.dart' show shiftToMap;
 
 /// Butun ilovaning holati va mock ma'lumotlar (mock-data.json bo'yicha).
 /// Backend YO'Q — barchasi xotirada, real interaktivlik.
@@ -23,6 +25,18 @@ class AppState extends ChangeNotifier {
   bool onboardingVisible = true;
   bool cashShiftsEnabled = true; // Настройки: Кассовые смены
   bool skladOpenLowFilter = false; // Bosh sahifadan «ниже лимита» ga o'tish
+
+  // ── Ochiq cheklar (Firestore `openChecks` — stollardagi buyurtmalar) ──
+  /// Xom snapshot (har Map ichida '_docId'). KassaController birlashtiradi.
+  final List<Map<String, dynamic>> openCheckDocs = [];
+  /// Birinchi snapshot keldimi (kelmaguncha lokal chek O'CHIRILMAYDI).
+  bool openChecksLoaded = false;
+  /// Har snapshot'da oshadi — KassaController shu orqali yangilikni sezadi.
+  int openChecksRev = 0;
+  /// Shu ishga tushirishning qurilma belgisi — o'z yozuvimizning aks-sadosini
+  /// (echo) boshqa qurilmaning tahriridan ajratish uchun.
+  final String deviceId =
+      '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}-${identityHashCode(Object()).toRadixString(36)}';
 
   // ── Kategoriyalar (boshlang'ich holat — bo'sh, foydalanuvchi o'zi kiritadi) ──
   final List<Category> categories = [];
@@ -57,7 +71,9 @@ class AppState extends ChangeNotifier {
   static const Map<String, Set<String>> rolePermissions = {
     'Владелец': {'all'},
     'Управляющий': {'home', 'kassa', 'halls', 'stats', 'finance', 'marketing', 'menu', 'sklad', 'employees', 'settings', 'apps', 'subscription'},
-    'Администратор зала': {'home', 'kassa', 'halls', 'stats', 'menu', 'sklad'},
+    // O-9: 'menu' olib tashlandi — server (canMenu) Администратор зала'ga menyu
+    // yozishni bermaydi; UI'da ko'rsatib jim ishlamaslik yaratmaslik uchun.
+    'Администратор зала': {'home', 'kassa', 'halls', 'stats', 'sklad'},
     'Официант': {'home', 'kassa', 'halls'},
     'Повар': {'home', 'menu', 'sklad'},
     'Маркетолог': {'home', 'stats', 'marketing'},
@@ -141,6 +157,114 @@ class AppState extends ChangeNotifier {
     Account(id: 2, name: 'Расчетный счет', type: 'Безналичный счет', balance: 0),
   ];
 
+  // ── Kassa smenasi (HOLAT-17: xposterwin'dan ko'chirildi) ──
+  Shift? currentShift;
+  final List<Shift> shiftsArchive = [];
+
+  int get cashBoxBalance {
+    final box = accounts.where((a) => a.name == 'Денежный ящик').toList();
+    return box.isEmpty ? 0 : box.first.balance;
+  }
+
+  int newShiftId() {
+    final ids = [...shiftsArchive.map((s) => s.id), if (currentShift != null) currentShift!.id];
+    return _nextId(ids);
+  }
+
+  /// Smenani ochish. [openingCash] — yashiqdagi boshlang'ich naqd (odatda joriy qoldiq).
+  Shift openShift({int? openingCash}) {
+    if (currentShift != null) return currentShift!;
+    final s = Shift(
+      id: newShiftId(),
+      openedAt: DateTime.now(),
+      openedBy: currentUser.name,
+      openingCash: openingCash ?? cashBoxBalance,
+    );
+    currentShift = s;
+    if (repo.ready) repo.saveShiftRaw(shiftToMap(s)).catchError((_) {});
+    notifyListeners();
+    return s;
+  }
+
+  /// Smenani yopish: kutilgan naqd = yashiqning joriy qoldig'i, [counted] — fakt.
+  /// Farq bo'lsa «Кассовые смены» toifasida tranzaksiya yaratiladi (qoldiq faktga tenglashadi).
+  Shift? closeShift({required int counted}) {
+    final s = currentShift;
+    if (s == null) return null;
+    s.expectedCash = cashBoxBalance;
+    s.countedCash = counted;
+    s.closedAt = DateTime.now();
+    s.closedBy = currentUser.name;
+
+    final d = s.diff;
+    if (d != 0) {
+      final now = DateTime.now();
+      addTransaction(TxItem(
+        id: newTxId(),
+        date: '${now.day.toString().padLeft(2, '0')}.${now.month.toString().padLeft(2, '0')} '
+            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
+        type: d > 0 ? 'доход' : 'расход',
+        category: 'Кассовые смены',
+        comment: 'Расхождение при закрытии смены №${s.id}',
+        amount: d,
+        account: 'Денежный ящик',
+      ));
+    }
+    shiftsArchive.insert(0, s);
+    currentShift = null;
+    if (repo.ready) repo.saveShiftRaw(shiftToMap(s)).catchError((_) {});
+    notifyListeners();
+    return s;
+  }
+
+  /// Sotuv ko'rsatkichlarini joriy smenaga qo'shish (completePayment'dan).
+  /// Firestore rejimida `increment` bilan yoziladi — smena boshqa qurilmada ham
+  /// jonli yangilanadi (listener: repository._listenShifts).
+  void shiftAddSale({required int revenue, required int profit, required int cash,
+      required int card, required int bonus, required int debt}) {
+    final s = currentShift;
+    if (s == null) return;
+    s.revenue += revenue;
+    s.profit += profit;
+    s.checks += 1;
+    s.cash += cash;
+    s.card += card;
+    s.bonus += bonus;
+    s.debt += debt;
+    if (repo.ready) {
+      repo.addShiftSale(s.id,
+          revenue: revenue, profit: profit, cash: cash,
+          card: card, bonus: bonus, debt: debt).catchError((_) {});
+    }
+  }
+
+  /// Y-4: vozvratда smena ko'rsatkichlarini teskari (shiftAddSale simmetrigi).
+  void shiftReverseSale({required int revenue, required int profit, required int cash,
+      required int card, required int bonus, required int debt}) {
+    final s = currentShift;
+    if (s == null) return;
+    s.revenue -= revenue;
+    s.profit -= profit;
+    s.checks -= 1;
+    s.cash -= cash;
+    s.card -= card;
+    s.bonus -= bonus;
+    s.debt -= debt;
+    if (repo.ready) {
+      repo.addShiftSale(s.id,
+          revenue: -revenue, profit: -profit, cash: -cash,
+          card: -card, bonus: -bonus, debt: -debt).catchError((_) {});
+    }
+  }
+
+  /// Qarz naqd qaytarilganda — smena naqd kirimiga qo'shiladi.
+  void shiftAddDebtRepaid(int amount) {
+    final s = currentShift;
+    if (s == null) return;
+    s.debtRepaid += amount;
+    if (repo.ready) repo.addShiftDebtRepaid(s.id, amount).catchError((_) {});
+  }
+
   final List<String> financeCategories = [
     'Продажи', 'Аренда', 'Зарплата', 'Поставки', 'Коммунальные платежи', 'Маркетинг',
     'Хозяйственные расходы', 'Банковские услуги и комиссии', 'Кассовые смены', 'Прочие доходы',
@@ -160,7 +284,9 @@ class AppState extends ChangeNotifier {
     'Пн': 0, 'Вт': 0, 'Ср': 0, 'Чт': 0, 'Пт': 0, 'Сб': 0, 'Вс': 0,
   };
 
-  final Map<String, int> paymentMethods = {'Наличные': 0, 'Карточка': 0, 'Бонусы': 0};
+  // «Долг» — xposterwin «В долг» to'lovini yozadi; bu yerda ham bo'lmasa
+  // qarzga sotilgan cheklar to'lov usullari bo'yicha hisobotdan tushib qolardi.
+  final Map<String, int> paymentMethods = {'Наличные': 0, 'Карточка': 0, 'Бонусы': 0, 'Долг': 0};
 
   final List<Map<String, dynamic>> topProducts = [];
 
@@ -190,13 +316,15 @@ class AppState extends ChangeNotifier {
   // ── Переработки (qayta ishlash): bir ingredientdan boshqasiga ──
   final List<Map<String, dynamic>> processings = [];
   void addProcessing({required Ingredient from, required double fromQty, required Ingredient to, required double toQty, required String date}) {
+    final fromOld = from.stock;
     from.stock = (from.stock - fromQty) < 0 ? 0 : from.stock - fromQty;
     to.stock += toQty;
     final p = {'date': date, 'from': from.name, 'fromQty': fromQty, 'fromUnit': from.unit, 'to': to.name, 'toQty': toQty, 'toUnit': to.unit};
     processings.insert(0, p);
     if (repo.ready) {
-      repo.saveIngredient(from);
-      repo.saveIngredient(to);
+      // K3: qoldiqni delta (increment) bilan — parallel sotuvni bosmaydi.
+      repo.adjustIngredientStock(from.id, from.stock - fromOld);
+      repo.adjustIngredientStock(to.id, toQty);
       repo.saveProcessingRaw(Map<String, dynamic>.from(p));
     }
     notifyListeners();
@@ -235,15 +363,17 @@ class AppState extends ChangeNotifier {
     'plan': 'Mini / 1 заведение', 'trialDaysLeft': 5,
   };
 
-  /// Trial tugashiga qolgan kunlar — `trialEndsAt` dan dinamik hisoblanadi.
-  /// null → trial sanasi noma'lum (banner ko'rsatilmaydi).
-  int? get trialDaysLeft {
-    final end = DateTime.tryParse(company['trialEndsAt'] as String? ?? '');
-    if (end == null) return null;
-    final now = DateTime.now();
-    final d = end.difference(DateTime(now.year, now.month, now.day)).inDays;
-    return d < 0 ? 0 : d;
-  }
+  /// BILLING O'CHIRILGAN (2026-07-23, foydalanuvchi qarori): trial/obuna banneri
+  /// va cheklovi ko'rsatilmaydi. null → hech qanday banner. Billing qaytadan
+  /// kerak bo'lganda quyidagi asl mantiqni tiklang.
+  int? get trialDaysLeft => null;
+  // int? get trialDaysLeft {
+  //   final end = DateTime.tryParse(company['trialEndsAt'] as String? ?? '');
+  //   if (end == null) return null;
+  //   final now = DateTime.now();
+  //   final d = end.difference(DateTime(now.year, now.month, now.day)).inDays;
+  //   return d < 0 ? 0 : d;
+  // }
 
   /// Trial tugash sanasi, ruscha formatda («9 июля»); noma'lum bo'lsa null.
   String? get trialEndsAtLabel {
@@ -496,7 +626,7 @@ class AppState extends ChangeNotifier {
   String? loginByPin(String pin) {
     // PIN faqat Firebase orqali kirilgan (kafe yuklangan) qurilmada ishlaydi.
     if (currentCafeId == null) { authError = 'Сначала войдите по e-mail'; return null; }
-    final e = employees.where((e) => e.pin == pin && e.active).toList();
+    final e = employees.where((e) => e.matchesPin(pin) && e.active).toList();
     if (e.isEmpty) return null;
     session = e.first;
     e.first.lastLogin = 'сейчас';
@@ -518,6 +648,32 @@ class AppState extends ChangeNotifier {
     session = null;
     currentCafeId = null;
     notifyListeners();
+  }
+
+  /// Akkauntni butunlay o'chirish (Google Play "Удалить аккаунт" talabi).
+  /// null → muvaffaqiyat (foydalanuvchi Login ekraniga qaytadi), aks holda
+  /// xato matni. Owner uchun BUTUN kafe(lar) va ma'lumot o'chadi — qaytarib
+  /// bo'lmaydi. Serverda (Cloud Function) bajariladi.
+  Future<String?> deleteAccount() async {
+    if (authBusy) return null;
+    authBusy = true; authError = null; notifyListeners();
+    try {
+      await NotificationService.instance.unsubscribeAll().catchError((_) {});
+      await repo.deleteAccount();          // server: Firestore + Auth o'chirish
+      await repo.dispose();                // listenerlarni yopamiz
+      await _auth.signOut().catchError((_) {}); // user allaqachon o'chgan bo'lishi mumkin
+      _clearCafeData();
+      session = null;
+      currentCafeId = null;
+      myCafes.clear();
+      return null;
+    } on FirebaseFunctionsException catch (e) {
+      return e.message ?? 'Не удалось удалить аккаунт';
+    } catch (_) {
+      return 'Не удалось удалить аккаунт. Проверьте соединение.';
+    } finally {
+      authBusy = false; notifyListeners();
+    }
   }
 
   /// Kassani qulflash: Firebase sessiya va ma'lumotlar saqlanadi,
@@ -640,7 +796,8 @@ class AppState extends ChangeNotifier {
     transactions.insert(0, t);
     final acc = accounts.firstWhere((a) => a.name == t.account, orElse: () => accounts.first);
     acc.balance += t.amount;
-    if (repo.ready) { repo.saveTransaction(t); repo.saveAccount(acc); }
+    // K3: balansni delta (increment) bilan yozamiz, absolyut saveAccount emas.
+    if (repo.ready) { repo.saveTransaction(t); repo.adjustAccountBalance(acc.id, t.amount); }
     notifyListeners();
   }
   int newTxId() => _nextId(transactions.map((t) => t.id));
@@ -717,15 +874,21 @@ class AppState extends ChangeNotifier {
     for (final l in lines) {
       l.ing.stock += l.qty;
     }
+    // K3: hisob balanslarini delta bilan yozamiz (absolyut `saveAccount` emas).
+    final Map<int, num> accDeltas = {};
     if (payments != null && payments.isNotEmpty) {
       for (final p in payments) {
         final norm = p.account.replaceAll('ё', 'е').toLowerCase();
         final acc = accounts.where((a) => a.name.replaceAll('ё', 'е').toLowerCase() == norm).toList();
-        if (acc.isNotEmpty) acc.first.balance -= p.amount;
+        if (acc.isNotEmpty) {
+          acc.first.balance -= p.amount;
+          accDeltas[acc.first.id] = (accDeltas[acc.first.id] ?? 0) - p.amount;
+        }
       }
     } else if (s.debt == 0) {
       final acc = accounts.firstWhere((a) => a.type == 'Безналичный счет', orElse: () => accounts.first);
       acc.balance -= s.sum;
+      accDeltas[acc.id] = (accDeltas[acc.id] ?? 0) - s.sum;
     }
     // Qarz bo'lsa — postavshchik balansiga yoziladi.
     if (s.debt > 0) {
@@ -734,8 +897,9 @@ class AppState extends ChangeNotifier {
     }
     if (repo.ready) {
       repo.saveSupply(s);
-      for (final l in lines) { repo.saveIngredient(l.ing); }
-      for (final a in accounts) { repo.saveAccount(a); }
+      // K3: qoldiq va balans DELTA bilan (increment) — parallel sotuvni bosmaydi.
+      for (final l in lines) { repo.adjustIngredientStock(l.ing.id, l.qty); }
+      accDeltas.forEach((id, d) => repo.adjustAccountBalance(id, d));
     }
     notifyListeners();
   }
@@ -743,8 +907,10 @@ class AppState extends ChangeNotifier {
   /// Spisaniye — qoldiqni kamaytiradi.
   void writeOff(List<({Ingredient ing, double qty})> lines) {
     for (final l in lines) {
+      final old = l.ing.stock;
       l.ing.stock = (l.ing.stock - l.qty).clamp(0, double.infinity);
-      if (repo.ready) repo.saveIngredient(l.ing);
+      // K3: qoldiqni delta (increment) bilan yozamiz.
+      if (repo.ready) repo.adjustIngredientStock(l.ing.id, l.ing.stock - old);
     }
     notifyListeners();
   }
@@ -805,14 +971,25 @@ class AppState extends ChangeNotifier {
         salesToday['visitors'] = (salesToday['visitors'] as int) + 1;
         byHour[c.hour] += r.sum;
         dayVals[(c.hour - 9).clamp(0, dayVals.length - 1).toInt()] += r.sum;
-        // To'lov usuli — label bo'yicha (aralash to'lovda birinchi mos usulga).
-        final p = r.payment;
-        if (p.contains('Налич')) {
-          paymentMethods['Наличные'] = (paymentMethods['Наличные'] ?? 0) + r.sum;
-        } else if (p.contains('Карт') || p.contains('Серт')) {
-          paymentMethods['Карточка'] = (paymentMethods['Карточка'] ?? 0) + r.sum;
-        } else if (p.contains('Бонус')) {
-          paymentMethods['Бонусы'] = (paymentMethods['Бонусы'] ?? 0) + r.sum;
+        // To'lov usuli (№7, HOLAT-17): yangi cheklarda aniq qismlar bor —
+        // aralash to'lov to'g'ri taqsimlanadi. Eski cheklar (payCash == null)
+        // uchun label evristikasi qoladi (butun summa birinchi mos usulga).
+        if (r.payCash != null) {
+          paymentMethods['Наличные'] = (paymentMethods['Наличные'] ?? 0) + (r.payCash ?? 0);
+          paymentMethods['Карточка'] = (paymentMethods['Карточка'] ?? 0) + (r.payCard ?? 0);
+          paymentMethods['Бонусы'] = (paymentMethods['Бонусы'] ?? 0) + (r.payBonus ?? 0);
+          paymentMethods['Долг'] = (paymentMethods['Долг'] ?? 0) + (r.payDebt ?? 0);
+        } else {
+          final p = r.payment;
+          if (p.contains('Налич')) {
+            paymentMethods['Наличные'] = (paymentMethods['Наличные'] ?? 0) + r.sum;
+          } else if (p.contains('Карт') || p.contains('Серт')) {
+            paymentMethods['Карточка'] = (paymentMethods['Карточка'] ?? 0) + r.sum;
+          } else if (p.contains('Бонус')) {
+            paymentMethods['Бонусы'] = (paymentMethods['Бонусы'] ?? 0) + r.sum;
+          } else if (p.contains('олг')) { // «В долг» / «Долг» (xposterwin yozadi)
+            paymentMethods['Долг'] = (paymentMethods['Долг'] ?? 0) + r.sum;
+          }
         }
         // Популярные товары — "Name ×N, Name2 ×M" satridan
         for (final part in r.items.split(', ')) {
@@ -852,6 +1029,7 @@ class AppState extends ChangeNotifier {
   void persistSale({
     required Receipt receipt,
     required int cashApplied,
+    int cardApplied = 0,
     required List<OrderLine> lines,
     Client? client,
     int bonusSpent = 0,
@@ -870,9 +1048,14 @@ class AppState extends ChangeNotifier {
         deltas.add((ingredientId: ing.id, amount: perPortion * l.qty));
       }
     }
+    // Y-4: vozvratni to'liq teskari qilish uchun kerakli ma'lumotni chekka yozamiz.
+    receipt.clientId = client?.id;
+    receipt.bonusEarned = bonusEarned;
+    receipt.stockConsumed = deltas.map((d) => {'id': d.ingredientId, 'amt': d.amount}).toList();
     repo.completePayment(
       receipt: receipt,
       cashAmount: cashApplied,
+      cardAmount: cardApplied,
       employeeUid: session?.uid,
       clientId: client?.id,
       bonusSpent: bonusSpent,
@@ -904,6 +1087,83 @@ class AppState extends ChangeNotifier {
   /// Chekni Firestore'ga yozish (masalan vozvrat status o'zgarishi).
   void saveReceipt(Receipt r) { if (repo.ready) repo.saveReceipt(r); notifyListeners(); }
 
+  /// Y-4/Y-6: chekni TO'LIQ teskari qiladi (completePayment simmetrigi):
+  /// statistika, to'lov usullari, kassa yashigi (payCash), kassir, smena,
+  /// mijoz bonus/totalSpent/debt va SKLAD qoldig'i. Grafiklar ham teskari.
+  void refundSale(Receipt r) {
+    // Statistika
+    salesToday['revenue'] = (salesToday['revenue'] as int) - r.sum;
+    salesToday['profit'] = (salesToday['profit'] as int) - r.profit;
+    salesToday['checks'] = (salesToday['checks'] as int) - 1;
+    final ch = salesToday['checks'] as int;
+    salesToday['avgCheck'] = ch > 0 ? ((salesToday['revenue'] as int) / ch).round() : 0;
+    // To'lov usullari + kassa yashigi (KR-3: faqat naqd ulush chiqadi)
+    final cashPart = r.payCash ?? (r.payment.contains('Налич') ? r.sum : 0);
+    final cardPart = r.payCard ?? ((r.payment.contains('Карт') || r.payment.contains('Сертиф')) ? r.sum : 0);
+    final bonusPart = r.payBonus ?? 0;
+    if (cashPart > 0) {
+      paymentMethods['Наличные'] = (paymentMethods['Наличные'] ?? 0) - cashPart;
+      final box = accounts.where((a) => a.name == 'Денежный ящик').toList();
+      if (box.isNotEmpty) {
+        box.first.balance -= cashPart;
+        if (repo.ready) repo.adjustAccountBalance(box.first.id, -cashPart);
+      }
+    }
+    if (cardPart > 0) {
+      paymentMethods['Карточка'] = (paymentMethods['Карточка'] ?? 0) - cardPart;
+      // O-1: karta vozvrati bank hisobidan qaytadi.
+      final bank = accounts.where((a) => a.type == 'Безналичный счет').toList();
+      if (bank.isNotEmpty) {
+        bank.first.balance -= cardPart;
+        if (repo.ready) repo.adjustAccountBalance(bank.first.id, -cardPart);
+      }
+    }
+    if (bonusPart > 0) paymentMethods['Бонусы'] = (paymentMethods['Бонусы'] ?? 0) - bonusPart;
+    // Kassir (chekда uid yo'q — nom bo'yicha)
+    final emp = employees.where((e) => e.name == r.waiter).toList();
+    if (emp.isNotEmpty) {
+      emp.first.revenue -= r.sum;
+      emp.first.checks -= 1;
+      if (repo.ready) repo.saveEmployee(emp.first);
+    }
+    // Smena teskari
+    shiftReverseSale(revenue: r.sum, profit: r.profit, cash: cashPart, card: cardPart, bonus: bonusPart, debt: r.payDebt ?? 0);
+    // Mijoz: sarflangan bonus qaytadi, topilgan bonus bekor, totalSpent/debt kamayadi
+    if (r.clientId != null) {
+      final bonusDelta = bonusPart - (r.bonusEarned ?? 0);
+      final cl = clients.where((c) => c.id == r.clientId).toList();
+      if (cl.isNotEmpty) {
+        cl.first.bonus += bonusDelta;
+        cl.first.totalSpent -= r.sum;
+        cl.first.debt -= (r.payDebt ?? 0);
+      }
+      if (repo.ready) repo.adjustClient(r.clientId!, bonusDelta: bonusDelta, totalSpentDelta: -r.sum, debtDelta: -(r.payDebt ?? 0));
+    }
+    // Sklad qaytadi (increment)
+    if (r.stockConsumed != null) {
+      for (final d in r.stockConsumed!) {
+        final id = (d['id'] as num).toInt();
+        final amt = (d['amt'] as num).toDouble();
+        final ing = ingredients.where((i) => i.id == id).toList();
+        if (ing.isNotEmpty) ing.first.stock += amt;
+        if (repo.ready) repo.adjustIngredientStock(id, amt);
+      }
+    }
+    // Grafiklar (soddalashtirilgan teskari)
+    int dec(int cur) => (cur - r.sum) < 0 ? 0 : cur - r.sum;
+    final rh = int.tryParse(r.time.split(':').first) ?? DateTime.now().hour;
+    if (rh >= 0 && rh < 24) byHour[rh] = dec(byHour[rh]);
+    const wk = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+    final wkKey = wk[(DateTime.now().weekday - 1).clamp(0, 6).toInt()];
+    byWeekday[wkKey] = dec(byWeekday[wkKey] ?? 0);
+    final dv = chartSeries['day']!['values'] as List<int>;
+    final di = (rh - 9).clamp(0, dv.length - 1).toInt();
+    dv[di] = dec(dv[di]);
+    (chartSeries['week']!['values'] as List<int>)[6] = dec((chartSeries['week']!['values'] as List<int>)[6]);
+    (chartSeries['month']!['values'] as List<int>)[29] = dec((chartSeries['month']!['values'] as List<int>)[29]);
+    notifyListeners();
+  }
+
   /// Sotuv yakunlangach — statistikani va qoldiqlarni yangilash (soddalashtirilgan).
   void completeSale({required int total, required int profit, required String payment}) {
     salesToday['revenue'] = (salesToday['revenue'] as int) + total;
@@ -911,9 +1171,11 @@ class AppState extends ChangeNotifier {
     salesToday['checks'] = (salesToday['checks'] as int) + 1;
     salesToday['visitors'] = (salesToday['visitors'] as int) + 1;
     salesToday['avgCheck'] = ((salesToday['revenue'] as int) / (salesToday['checks'] as int)).round();
-    // Kassa naqd hisobiga qo'shish
+    // Kassa naqd hisobiga qo'shish. `firstWhere` orElse'siz edi: hisob
+    // o'chirilgan/nomi o'zgargan bo'lsa StateError bilan release'da qulardi.
     if (payment.contains('Налич')) {
-      accounts.firstWhere((a) => a.name == 'Денежный ящик').balance += total;
+      final box = accounts.where((a) => a.name == 'Денежный ящик').toList();
+      if (box.isNotEmpty) box.first.balance += total;
     }
     notifyListeners();
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../../models.dart';
 import '../../state/app_state.dart';
@@ -8,12 +10,24 @@ class CheckDoc {
   final List<OrderLine> lines = [];
   Client? client;
   String? comment; // chekka izoh (prototip: check.comment)
-  final DateTime openedAt = DateTime.now();
+  DateTime openedAt = DateTime.now(); // restore'da Firestore'dan tiklanadi
   // ── Zal xizmati ──
   String orderType = 'В заведении'; // В заведении | Навынос
   int? hallId;   // qaysi zal
   int? tableId;  // qaysi stol (null → stolsiz / навынос)
   int guests = 0; // mehmonlar soni
+  /// Stol ochilgan vaqt. Android'da ijara hisobi yo'q, lekin maydon sxema
+  /// simmetriyasi uchun SHART (BACKEND.md Qoida 2): Windows'da ochilgan chekni
+  /// android tahrirlasa `seatedAt` yo'qolib, ijara taymeri nolga tushardi.
+  DateTime? seatedAt;
+  // ── Firestore sinxron (cafes/{id}/openChecks) ──
+  String? docId; // hujjat kaliti (auto-ID); null = hali saqlanmagan
+  int rev = 0;   // shu yozuvchining versiya hisoblagichi (o'z echo'mizni tanish uchun)
+  /// Serverdan kelgan xom clientId. Bootstrap race himoyasi: openChecks
+  /// snapshot'i `clients`dan OLDIN kelsa `client` obyektga bog'lanmaydi;
+  /// bu maydonsiz keyingi flush `clientId: null` yozib mijozni (va
+  /// chegirmasini) chekdan doimiy uzib qo'yardi.
+  int? restoredClientId;
   CheckDoc(this.number);
 
   bool get isDineIn => orderType == 'В заведении';
@@ -47,6 +61,96 @@ class CheckDoc {
   int get profitBase => costTotal;
 }
 
+// ─────────────────── Ochiq chek ↔ Firestore Map (sxema: BACKEND.md Qoida 2) ───────────────────
+// DIQQAT: bu sxema `xposterwin` dagi nusxa bilan AYNAN bir xil bo'lishi shart.
+
+/// CheckDoc → Map. Meta maydonlar (`rev`, `device`, `updatedAt`) bu yerga
+/// KIRMAYDI — ular saqlash paytida qo'shiladi; shu tufayli jsonEncode natijasi
+/// «lokal tahrir bormi?» (dirty) taqqoslashi uchun barqaror.
+Map<String, dynamic> openCheckToMap(CheckDoc c) => {
+      'number': c.number,
+      'orderType': c.orderType,
+      'hallId': c.hallId,
+      'tableId': c.tableId,
+      'guests': c.guests,
+      'openedAtIso': c.openedAt.toIso8601String(),
+      'seatedAtIso': c.seatedAt?.toIso8601String(),
+      // `restoredClientId` fallback: clients hali yuklanmagan bo'lsa ham
+      // serverdagi bog'lanish yo'qolmaydi.
+      'clientId': c.client?.id ?? c.restoredClientId,
+      'comment': c.comment,
+      'lines': [
+        for (final l in c.lines)
+          {
+            'productId': l.product.id,
+            // Snapshot maydonlar: mahsulot keyin o'chirilsa ham chek o'qiladi.
+            'name': l.product.name,
+            'price': l.product.price,
+            'cost': l.product.cost,
+            'qty': l.qty,
+            'modification': l.modification,
+            'comment': l.comment,
+          }
+      ],
+    };
+
+/// Map ma'lumotini mavjud CheckDoc ustiga qo'llash (lines to'liq almashadi).
+void applyOpenCheckMap(CheckDoc c, Map<String, dynamic> m, AppState app) {
+  c.orderType = m['orderType'] as String? ?? 'В заведении';
+  c.hallId = (m['hallId'] as num?)?.toInt();
+  c.tableId = (m['tableId'] as num?)?.toInt();
+  c.guests = (m['guests'] as num?)?.toInt() ?? 0;
+  c.openedAt = DateTime.tryParse(m['openedAtIso'] as String? ?? '') ?? c.openedAt;
+  final seated = m['seatedAtIso'] as String?;
+  c.seatedAt = seated == null ? null : DateTime.tryParse(seated);
+  c.comment = m['comment'] as String?;
+  final clientId = (m['clientId'] as num?)?.toInt();
+  c.restoredClientId = clientId; // xom qiymat saqlanadi (clients kech kelsa ham)
+  if (clientId == null) {
+    c.client = null;
+  } else {
+    final cl = app.clients.where((x) => x.id == clientId).toList();
+    c.client = cl.isEmpty ? null : cl.first;
+  }
+  c.lines.clear();
+  final lines = m['lines'];
+  if (lines is List) {
+    for (final raw in lines) {
+      if (raw is! Map) continue;
+      final lm = Map<String, dynamic>.from(raw);
+      final pid = (lm['productId'] as num?)?.toInt() ?? -1;
+      final match = app.products.where((p) => p.id == pid).toList();
+      final product = match.isNotEmpty
+          ? match.first
+          : Product(
+              id: pid,
+              name: lm['name'] as String? ?? '—',
+              categoryId: 0,
+              type: 'product',
+              workshop: null,
+              price: (lm['price'] as num?)?.toInt() ?? 0,
+              cost: (lm['cost'] as num?)?.toInt() ?? 0,
+              photo: '🧾',
+            );
+      c.lines.add(OrderLine(
+        product,
+        qty: (lm['qty'] as num?)?.toDouble() ?? 1,
+        comment: lm['comment'] as String?,
+        modification: lm['modification'] as String?,
+      ));
+    }
+  }
+}
+
+/// Map → yangi CheckDoc (boshqa qurilmada/oldingi seansda ochilgan chek).
+CheckDoc openCheckFromMap(Map<String, dynamic> m, AppState app, String docId) {
+  final c = CheckDoc((m['number'] as num?)?.toInt() ?? 1);
+  c.docId = docId;
+  c.rev = (m['rev'] as num?)?.toInt() ?? 0;
+  applyOpenCheckMap(c, m, app);
+  return c;
+}
+
 /// Kassa holati: PIN, foydalanuvchi, parallel cheklar.
 class KassaController extends ChangeNotifier {
   final AppState app;
@@ -54,12 +158,184 @@ class KassaController extends ChangeNotifier {
   KassaController(this.app) {
     user = app.session;
     _syncNextOrder(); // chek raqami arxivdan davom etadi (1 dan qayta boshlanmaydi!)
+    // Ochiq cheklar Firestore'dan tiklanadi (restart/qulash/boshqa qurilma).
+    app.addListener(_onAppChanged);
+    _lastSeenRemoteRev = app.openChecksRev;
+    _mergeRemote(notify: false);
   }
 
   final List<CheckDoc> checks = [CheckDoc(1)];
   int activeIndex = 0;
   int _nextNumber = 2;
   int nextOrder = 1; // arxiv cheklari №1 dan boshlanadi
+
+  // ─────────────── Ochiq cheklar sinxroni (cafes/{id}/openChecks) ───────────────
+  //
+  // Yozish: har mutatsiya notifyListeners() dan o'tadi → 400 ms debounce →
+  // o'zgargan cheklar to'liq set() bilan yoziladi (rev+device meta bilan).
+  // O'qish: repository listener'i app.openCheckDocs ni yangilaydi →
+  // _onAppChanged → _mergeRemote lokal ro'yxat bilan birlashtiradi.
+  // Konflikt: lokal saqlanmagan tahrir bo'lsa remote qo'llanmaydi (keyingi
+  // flush baribir yozadi — last-write-wins, POS uchun yetarli).
+
+  final Map<String, String> _lastSavedJson = {}; // docId → oxirgi yozilgan/qo'llangan holat
+  final Set<String> _locallyDeleted = {};        // biz o'chirganlar (kech kelgan snapshot qaytarmasin)
+  Timer? _saveTimer;
+  int _lastSeenRemoteRev = -1;
+  bool _disposed = false;
+
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    _scheduleSave();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _saveTimer?.cancel();
+    app.removeListener(_onAppChanged);
+    super.dispose();
+  }
+
+  void _onAppChanged() {
+    if (_disposed) return;
+    if (app.openChecksRev != _lastSeenRemoteRev) {
+      _lastSeenRemoteRev = app.openChecksRev;
+      _mergeRemote();
+    }
+    // Bootstrap race: openChecks snapshot'i `clients`dan oldin kelgan bo'lsa,
+    // mijozlar yuklangach chekka qayta bog'laymiz (clientId yo'qolmagan).
+    var resolved = false;
+    for (final c in checks) {
+      if (c.client == null && c.restoredClientId != null) {
+        final cl = app.clients.where((x) => x.id == c.restoredClientId).toList();
+        if (cl.isNotEmpty) {
+          c.client = cl.first;
+          resolved = true;
+        }
+      }
+    }
+    if (resolved) notifyListeners();
+  }
+
+  bool _persistWorthy(CheckDoc c) =>
+      c.lines.isNotEmpty ||
+      c.tableId != null ||
+      c.client != null ||
+      (c.comment?.isNotEmpty ?? false);
+
+  void _scheduleSave() {
+    if (_disposed || !app.repo.ready) return;
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 400), _flushSaves);
+  }
+
+  /// O'zgargan cheklarni Firestore'ga yozish (oflaynda SDK navbatiga tushadi).
+  void _flushSaves() {
+    if (_disposed || !app.repo.ready) return;
+    for (final c in List<CheckDoc>.from(checks)) {
+      if (!_persistWorthy(c)) {
+        // Avval saqlangan, endi bo'shagan chek — serverdan ham o'chadi.
+        if (c.docId != null && _lastSavedJson.containsKey(c.docId)) _deleteRemote(c);
+        continue;
+      }
+      c.docId ??= app.repo.newOpenCheckId();
+      final id = c.docId;
+      if (id == null) continue;
+      final json = jsonEncode(openCheckToMap(c));
+      if (_lastSavedJson[id] == json) continue; // o'zgarmagan
+      c.rev += 1;
+      _lastSavedJson[id] = json;
+      _locallyDeleted.remove(id);
+      app.repo
+          .saveOpenCheckRaw(id, {...openCheckToMap(c), 'rev': c.rev, 'device': app.deviceId})
+          .catchError((e) => debugPrint('openCheck save failed: $e'));
+    }
+  }
+
+  /// To'langan/yopilgan chekni serverdan o'chirish.
+  void _deleteRemote(CheckDoc c) {
+    final id = c.docId;
+    if (id == null) return;
+    _lastSavedJson.remove(id);
+    _locallyDeleted.add(id);
+    // Chek hali ro'yxatda qolayotgan bo'lsa (bo'shatilgan aktiv chek holati),
+    // docId'ni uzamiz — aks holda keyingi snapshot (hujjat yo'q) uni
+    // _mergeRemote 1-bosqichida ro'yxatdan olib tashlab, kassirning aktiv
+    // chekini yangi raqamli chek bilan almashtirib yuborardi.
+    c.docId = null;
+    c.rev = 0;
+    if (app.repo.ready) {
+      app.repo.deleteOpenCheck(id).catchError((e) => debugPrint('openCheck delete failed: $e'));
+    }
+  }
+
+  /// Firestore snapshot'ini lokal `checks` bilan birlashtirish.
+  void _mergeRemote({bool notify = true}) {
+    if (!app.openChecksLoaded) return;
+    final remote = <String, Map<String, dynamic>>{
+      for (final m in app.openCheckDocs) m['_docId'] as String: m,
+    };
+    var changed = false;
+    final activeDoc = checks.isEmpty ? null : checks[activeIndex.clamp(0, checks.length - 1)];
+
+    // 1) Serverdan yo'qolganlar (boshqa qurilmada to'langan/yopilgan).
+    //    Firestore lokal keshi o'z yozuvimizni snapshot'da darhol ko'rsatadi,
+    //    shuning uchun «yozdim-u hali serverga bormadi» holati bu yerga tushmaydi.
+    for (var i = checks.length - 1; i >= 0; i--) {
+      final c = checks[i];
+      final id = c.docId;
+      if (id == null || remote.containsKey(id)) continue;
+      checks.removeAt(i);
+      _lastSavedJson.remove(id);
+      _locallyDeleted.remove(id);
+      changed = true;
+    }
+
+    // 2) Serverdagi hujjatlar: yangisini qo'shish / o'zgarganini qo'llash.
+    for (final e in remote.entries) {
+      if (_locallyDeleted.contains(e.key)) continue; // o'chirish echo'sini kutyapmiz
+      final m = e.value;
+      final idx = checks.indexWhere((c) => c.docId == e.key);
+      if (idx < 0) {
+        final c = openCheckFromMap(m, app, e.key);
+        _lastSavedJson[e.key] = jsonEncode(openCheckToMap(c));
+        checks.add(c);
+        if (c.number >= _nextNumber) _nextNumber = c.number + 1;
+        changed = true;
+      } else {
+        final c = checks[idx];
+        final fromSelf = m['device'] == app.deviceId;
+        final remoteRev = (m['rev'] as num?)?.toInt() ?? 0;
+        if (fromSelf && remoteRev >= c.rev) continue; // o'z yozuvimiz echo'si
+        if (fromSelf) continue; // eski echo — lokal yangiroq
+        // Boshqa qurilma tahriri: lokalda saqlanmagan o'zgarish bo'lsa tegmaymiz.
+        final localJson = jsonEncode(openCheckToMap(c));
+        if (_lastSavedJson[e.key] != localJson) continue; // dirty — lokal ustun
+        applyOpenCheckMap(c, m, app);
+        c.rev = remoteRev;
+        _lastSavedJson[e.key] = jsonEncode(openCheckToMap(c));
+        changed = true;
+      }
+    }
+
+    if (!changed) return;
+
+    // 3) Bootstrap bo'sh cheki: remote'dan cheklar kelgach, foydalanuvchi
+    //    ishlatmayotgan docId'siz bo'sh chekni olib tashlaymiz (aktivga tegmaymiz).
+    if (checks.length > 1) {
+      checks.removeWhere((c) =>
+          c.docId == null && !_persistWorthy(c) && !identical(c, activeDoc));
+    }
+    if (checks.isEmpty) checks.add(CheckDoc(_nextNumber++));
+
+    // 4) Aktiv chekni identity bo'yicha tiklash.
+    final ai = activeDoc == null ? -1 : checks.indexWhere((c) => identical(c, activeDoc));
+    activeIndex = (ai >= 0 ? ai : 0).clamp(0, checks.length - 1);
+
+    if (notify) notifyListeners();
+  }
 
   /// Arxivdagi eng katta chek raqamidan davom etish (restart/boshqa qurilma).
   void _syncNextOrder() {
@@ -83,7 +359,10 @@ class KassaController extends ChangeNotifier {
 
   // ── PIN ──
   String? tryLogin(String pin) {
-    final emp = app.employees.where((e) => e.pin == pin).toList();
+    // `e.active` SHART: ishdan bo'shatilgan xodim ham kassaga kirib ketardi
+    // (loginByPin da tekshiruv bor edi, bu yerda yo'q edi).
+    // matchesPin: pinHash+salt bo'lsa hash, aks holda legacy ochiq matn.
+    final emp = app.employees.where((e) => e.matchesPin(pin) && e.active).toList();
     if (emp.isEmpty) return null;
     user = emp.first;
     app.currentUser = emp.first;
@@ -133,17 +412,20 @@ class KassaController extends ChangeNotifier {
   void clearActive() {
     active.lines.clear();
     active.client = null;
+    active.restoredClientId = null; // aks holda flush eski mijozni qaytarib yozardi
     active.comment = null;
     notifyListeners();
   }
 
   void attachClient(Client c) {
     active.client = c;
+    active.restoredClientId = c.id;
     notifyListeners();
   }
 
   void detachClient() {
     active.client = null;
+    active.restoredClientId = null; // aks holda flush eski mijozni qaytarib yozardi
     notifyListeners();
   }
 
@@ -168,6 +450,9 @@ class KassaController extends ChangeNotifier {
       active.hallId = hallId;
       active.tableId = tableId;
       active.guests = guests;
+      // Windows bilan simmetriya: ijara taymeri stol ochilgan paytdan boshlanadi
+      // (android'da hisob ko'rsatilmaydi, lekin Windows kassasi shu vaqtga tayanadi).
+      active.seatedAt = DateTime.now();
     }
     notifyListeners();
   }
@@ -179,6 +464,7 @@ class KassaController extends ChangeNotifier {
     active.hallId = null;
     active.tableId = null;
     active.guests = 0;
+    active.seatedAt = null;
     notifyListeners();
   }
 
@@ -192,7 +478,10 @@ class KassaController extends ChangeNotifier {
   }
 
   void switchCheck(int i) {
-    activeIndex = i;
+    if (checks.isEmpty) return;
+    // Eskirgan indeks (masalan, boshqa qurilma chekni yopib ro'yxat qisqargan
+    // payt) RangeError bermasin — windows'dagi bilan bir xil himoya.
+    activeIndex = i.clamp(0, checks.length - 1);
     notifyListeners();
   }
 
@@ -206,6 +495,11 @@ class KassaController extends ChangeNotifier {
     return cap < 0 ? 0 : cap;
   }
 
+  /// Y-7: oxirgi to'langan chek — aynan shu CheckDoc ikki marta to'lanmasin
+  /// (double-tap / re-fire). Cross-device (ikki qurilma bir chekni bir vaqtda)
+  /// uchun server-side kerak — Windows'da client runTransaction ishlamaydi.
+  CheckDoc? _lastPaidDoc;
+
   /// To'lov yakunlangach: arxivga, statistika, chekni tozalash.
   /// [parts]: cash/card/cert/bonus summalar. [change]: qaytim.
   void completePayment({
@@ -218,8 +512,12 @@ class KassaController extends ChangeNotifier {
     required int totalDue,
   }) {
     final doc = active;
+    // Y-7: bo'sh yoki aynan shu chek qayta to'lanmasin (double-tap/re-fire himoyasi).
+    if (doc.lines.isEmpty || identical(_lastPaidDoc, doc)) return;
+    _lastPaidDoc = doc;
     _syncNextOrder(); // parallel qurilma/eski sessiya raqami bilan to'qnashmasin
     final cashApplied = (parts['cash'] ?? 0) - change;
+    final cardApplied = (parts['card'] ?? 0) + (parts['cert'] ?? 0); // O-1: karta+sertifikat → безнал
     final itemsStr = doc.lines
         .map((l) => '${l.product.name} ×${l.qty % 1 == 0 ? l.qty.toInt() : qtyStr(l.qty)}')
         .join(', ');
@@ -232,6 +530,12 @@ class KassaController extends ChangeNotifier {
       payment: paymentLabel,
       items: itemsStr,
       profit: profit,
+      // To'lov qismlari (№7) — X/Z-otchet aralash to'lovni to'g'ri taqsimlaydi.
+      // Android'da sertifikat karta bilan birga hisoblanadi (mavjud siyosat).
+      payCash: cashApplied,
+      payCard: (parts['card'] ?? 0) + (parts['cert'] ?? 0),
+      payBonus: parts['bonus'] ?? 0,
+      payDebt: parts['debt'] ?? 0,
     );
     app.receiptsArchive.insert(0, receipt);
     nextOrder += 1;
@@ -247,6 +551,16 @@ class KassaController extends ChangeNotifier {
     app.paymentMethods['Карточка'] =
         (app.paymentMethods['Карточка'] ?? 0) + (parts['card'] ?? 0) + (parts['cert'] ?? 0);
     app.paymentMethods['Бонусы'] = (app.paymentMethods['Бонусы'] ?? 0) + (parts['bonus'] ?? 0);
+    // Ochiq smena ko'rsatkichlari (Z-otchet) — HOLAT-17: avval android savdosi
+    // smenani umuman oshirmasdi, Windows Z-otcheti kam ko'rsatardi.
+    app.shiftAddSale(
+      revenue: totalDue,
+      profit: profit,
+      cash: cashApplied,
+      card: (parts['card'] ?? 0) + (parts['cert'] ?? 0),
+      bonus: parts['bonus'] ?? 0,
+      debt: parts['debt'] ?? 0,
+    );
     // «Популярные товары» (Главная/Статистика) — real savdolardan yig'iladi.
     for (final l in doc.lines) {
       final existing = app.topProducts.where((t) => t['name'] == l.product.name).toList();
@@ -261,6 +575,11 @@ class KassaController extends ChangeNotifier {
     // Naqd — kassa yashigiga
     final cashBox = app.accounts.where((a) => a.name == 'Денежный ящик').toList();
     if (cashBox.isNotEmpty) cashBox.first.balance += cashApplied;
+    // O-1: karta — безнал (bank) hisobiga (ilgari balans yangilanmasdi, «Счета»da 0 turardi).
+    if (cardApplied > 0) {
+      final bank = app.accounts.where((a) => a.type == 'Безналичный счет').toList();
+      if (bank.isNotEmpty) bank.first.balance += cardApplied;
+    }
     // Kassir statistikasi (Статистика → Сотрудники)
     if (user != null) {
       user!.revenue += totalDue;
@@ -291,6 +610,7 @@ class KassaController extends ChangeNotifier {
     app.persistSale(
       receipt: receipt,
       cashApplied: cashApplied,
+      cardApplied: cardApplied,
       lines: doc.lines,
       client: doc.client,
       bonusSpent: bonusUsed,
@@ -302,6 +622,7 @@ class KassaController extends ChangeNotifier {
 
     // Chekni yakunlash: agar ko'p chek bo'lsa — olib tashlash, aks holda 1-chekka reset.
     checks.removeAt(activeIndex);
+    _deleteRemote(doc); // to'landi — ochiq cheklar kolleksiyasidan o'chadi
     if (checks.isEmpty) {
       checks.add(CheckDoc(1));
       _nextNumber = 2;
@@ -311,8 +632,22 @@ class KassaController extends ChangeNotifier {
   }
 
   /// «Закрыть без оплаты» — chekni to'lovsiz yopish.
+  /// №5 (HOLAT-17): endi audit izi qoladi — `voidedChecks` jurnaliga kim,
+  /// qachon, qaysi stol va qancha summani to'lovsiz yopgani yoziladi
+  /// (klassik POS firibgarlik vektori edi: hech qanday iz qolmasdi).
   void closeWithoutPay() {
+    final doc = active;
+    if (app.repo.ready && _persistWorthy(doc)) {
+      app.repo.saveVoidedCheck({
+        ...openCheckToMap(doc),
+        'sum': doc.dueFor(app),
+        'employeeUid': user?.uid ?? app.session?.uid,
+        'employeeName': user?.name ?? app.session?.name ?? '',
+        'device': app.deviceId,
+      }).catchError((e) => debugPrint('voidedCheck save failed: $e'));
+    }
     checks.removeAt(activeIndex);
+    _deleteRemote(doc); // yopildi — serverdan ham o'chadi
     if (checks.isEmpty) checks.add(CheckDoc(1));
     activeIndex = 0;
     notifyListeners();

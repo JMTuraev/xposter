@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import '../models.dart';
 import '../state/app_state.dart';
+import '../utils/pin_hash.dart';
 import 'firestore_refs.dart';
 import 'serializers.dart';
 
@@ -48,16 +49,30 @@ class FirestoreRepository {
         // Self-heal: keyingi login'lar query'siz ishlashi uchun yozib qo'yamiz.
         try { await db.owner(uid).set({'cafeId': cafeId}, SetOptions(merge: true)); } catch (_) {}
       }
-      final me = Employee(
-        id: 0,
-        name: (ownerDoc.data()?['name'] as String?) ?? 'Owner',
-        role: Roles.owner,
-        pin: '',
-        phone: '',
-        login: emailFallback ?? (ownerDoc.data()?['email'] as String?),
-        uid: uid,
-        active: true,
-      );
+      // MUHIM (HOLAT-16 audit): owner uchun `me` ni SINTEZ QILMAYMIZ —
+      // haqiqiy employees/{uid} hujjatini o'qiymiz (provision uni yaratadi).
+      // Sintez qilinganda pin/pinHash bo'sh, id=0, revenue=0 bo'lardi va
+      // profil tahriri (`saveEmployee` to'liq set) owner'ning PIN hash'i va
+      // statistikasini o'chirib yuborardi.
+      Employee me;
+      Map<String, dynamic>? empData;
+      try {
+        empData = (await db.employees(cafeId).doc(uid).get()).data();
+      } catch (_) {}
+      if (empData != null) {
+        me = employeeFromMap(empData)..uid = uid;
+      } else {
+        me = Employee(
+          id: 0,
+          name: (ownerDoc.data()?['name'] as String?) ?? 'Owner',
+          role: Roles.owner,
+          pin: '',
+          phone: '',
+          login: emailFallback ?? (ownerDoc.data()?['email'] as String?),
+          uid: uid,
+          active: true,
+        );
+      }
       return UserContext(uid: uid, isOwner: true, cafeId: cafeId, me: me);
     }
     // 2) Xodim? (collectionGroup bo'yicha uid = docId)
@@ -90,14 +105,16 @@ class FirestoreRepository {
       _listen<ClientGroup>(db.clientGroups(cafeId), clientGroupFromMap, app.clientGroups),
       _listen<Client>(db.clients(cafeId), clientFromMap, app.clients),
       _listen<Account>(db.accounts(cafeId), accountFromMap, app.accounts),
-      _listen<TxItem>(db.transactions(cafeId), txFromMap, app.transactions, orderByDesc: 'id'),
-      _listen<Receipt>(db.receipts(cafeId), receiptFromMap, app.receiptsArchive,
-          orderByDesc: 'id', onUpdate: app.recomputeStatsFromReceipts),
+      _listen<TxItem>(db.transactions(cafeId), txFromMap, app.transactions,
+          orderByDesc: 'id', setId: (t, id) => t.docId = id),
+      _listenReceipts(cafeId),
       _listen<Supply>(db.supplies(cafeId), supplyFromMap, app.supplies, orderByDesc: 'id'),
       _listen<Hall>(db.halls(cafeId), hallFromMap, app.halls),
       _listen<RestTable>(db.tables(cafeId), tableFromMap, app.tables),
       _listenEmployees(cafeId),
       _listenStorages(cafeId),
+      _listenOpenChecks(cafeId),
+      _listenShifts(cafeId),
       _listenRawList(db.wastes(cafeId), app.wastes),
       _listenRawList(db.processings(cafeId), app.processings),
       _listenRawList(db.inventories(cafeId), app.inventoryChecks, orderField: 'id'),
@@ -154,6 +171,7 @@ class FirestoreRepository {
     List<T> target, {
     String? orderByDesc,
     void Function()? onUpdate,
+    void Function(T, String)? setId,
   }) {
     Query<Map<String, dynamic>> q = col;
     if (orderByDesc != null) q = q.orderBy(orderByDesc, descending: true);
@@ -161,7 +179,11 @@ class FirestoreRepository {
     _subs.add(q.snapshots().listen((snap) {
       target
         ..clear()
-        ..addAll(snap.docs.map((d) => fromMap(d.data())));
+        ..addAll(snap.docs.map((d) {
+          final item = fromMap(d.data());
+          if (setId != null) setId(item, d.id);
+          return item;
+        }));
       onUpdate?.call();
       app.notify();
       if (!first.isCompleted) first.complete();
@@ -210,12 +232,81 @@ class FirestoreRepository {
     return first.future;
   }
 
+  /// Chek arxivi. Generic `_listen` dan farqi: har chekka Firestore hujjat
+  /// kalitini (`docId`) biriktiradi. Yangi cheklar auto-ID bilan yoziladi —
+  /// vozvrat/qayta yozish doim docId orqali boradi, `id` (ko'rsatiladigan raqam)
+  /// to'qnashsa ham hujjatlar ustma-ust tushmaydi.
+  Future<void> _listenReceipts(String cafeId) {
+    final first = Completer<void>();
+    _subs.add(db.receipts(cafeId).orderBy('id', descending: true).snapshots().listen((snap) {
+      app.receiptsArchive
+        ..clear()
+        ..addAll(snap.docs.map((d) {
+          final r = receiptFromMap(d.data());
+          r.docId = d.id;
+          return r;
+        }));
+      app.recomputeStatsFromReceipts();
+      app.notify();
+      if (!first.isCompleted) first.complete();
+    }, onError: (_) {
+      if (!first.isCompleted) first.complete();
+    }));
+    return first.future;
+  }
+
+  /// Ochiq cheklar (stollardagi buyurtmalar). Xom Map ro'yxati AppState'da
+  /// saqlanadi; KassaController uni o'z `checks` ro'yxati bilan birlashtiradi.
+  /// docId `_docId` kaliti bilan qo'shib qo'yiladi.
+  Future<void> _listenOpenChecks(String cafeId) {
+    final first = Completer<void>();
+    _subs.add(db.openChecks(cafeId).snapshots().listen((snap) {
+      app.openCheckDocs
+        ..clear()
+        ..addAll(snap.docs.map((d) => {...d.data(), '_docId': d.id}));
+      app.openChecksLoaded = true;
+      app.openChecksRev++;
+      app.notify();
+      if (!first.isCompleted) first.complete();
+    }, onError: (_) {
+      if (!first.isCompleted) first.complete();
+    }));
+    return first.future;
+  }
+
+  /// Kassa smenalari: ochiq smena + yopilganlar arxivi (HOLAT-17,
+  /// xposterwin'dagi bilan bir xil). Shu listener tufayli Windows'da ochilgan
+  /// smena android'da ham ko'rinadi va android savdosi Z-otchetga tushadi.
+  Future<void> _listenShifts(String cafeId) {
+    final first = Completer<void>();
+    _subs.add(db.shifts(cafeId).orderBy('id', descending: true).snapshots().listen((snap) {
+      final all = snap.docs.map((d) => shiftFromMap(d.data())).toList();
+      app.shiftsArchive
+        ..clear()
+        ..addAll(all.where((s) => !s.isOpen));
+      final open = all.where((s) => s.isOpen).toList();
+      app.currentShift = open.isEmpty ? null : open.first;
+      app.notify();
+      if (!first.isCompleted) first.complete();
+    }, onError: (_) {
+      if (!first.isCompleted) first.complete();
+    }));
+    return first.future;
+  }
+
   Future<void> dispose() async {
     for (final s in _subs) {
       await s.cancel();
     }
     _subs.clear();
     cafeId = null;
+    // Ochiq cheklar boshqa kafega «ergashib» ketmasin.
+    app.openCheckDocs.clear();
+    app.openChecksLoaded = false;
+    app.openChecksRev++;
+    // Smena holati ham eski kafedan qolmasin.
+    app.currentShift = null;
+    app.shiftsArchive.clear();
   }
 
   // ─────────────────────────── Write-through (CRUD) ───────────────────────────
@@ -248,6 +339,15 @@ class FirestoreRepository {
     await db.ingredients(_c!).doc(i.id.toString()).set(ingredientToMap(i));
   }
 
+  /// K3: qoldiqni DELTA bilan (increment) yozadi — postavka(+)/spisaniye(-)/
+  /// pererabotka/vozvrat. Absolyut `saveIngredient` faqat inventarizatsiya
+  /// (recount, kafe yopiq) va ingredient tahriri uchun.
+  Future<void> adjustIngredientStock(int id, num delta) async {
+    if (_c == null || delta == 0) return;
+    await db.ingredients(_c!).doc(id.toString()).set(
+        {'stock': FieldValue.increment(delta)}, SetOptions(merge: true));
+  }
+
   Future<void> deleteIngredient(int id) async {
     if (_c == null) return;
     await db.ingredients(_c!).doc(id.toString()).delete();
@@ -273,15 +373,42 @@ class FirestoreRepository {
     await db.clients(_c!).doc(c.id.toString()).set(clientToMap(c));
   }
 
+  /// Y-4: mijoz bonus/totalSpent/debt ni DELTA (increment) bilan yozadi — vozvrat.
+  /// Absolyut `saveClient` concurrent sotuv increment'ini bosmasin.
+  Future<void> adjustClient(int id, {int bonusDelta = 0, int totalSpentDelta = 0, int debtDelta = 0}) async {
+    if (_c == null) return;
+    final data = <String, dynamic>{};
+    if (bonusDelta != 0) data['bonus'] = FieldValue.increment(bonusDelta);
+    if (totalSpentDelta != 0) data['totalSpent'] = FieldValue.increment(totalSpentDelta);
+    if (debtDelta != 0) data['debt'] = FieldValue.increment(debtDelta);
+    if (data.isEmpty) return;
+    await db.clients(_c!).doc(id.toString()).set(data, SetOptions(merge: true));
+  }
+
   Future<void> saveAccount(Account a) async {
     if (_c == null) return;
     await db.accounts(_c!).doc(a.id.toString()).set(accountToMap(a));
   }
 
+  /// K3: balansni DELTA bilan (FieldValue.increment) yozadi — absolyut `set`
+  /// concurrent sotuvni bosib ketmasin (lost update). `saveAccount` faqat
+  /// hisob yaratish/nomlash uchun; balans o'zgarishi doim shu yo'l bilan.
+  Future<void> adjustAccountBalance(int id, num delta) async {
+    if (_c == null || delta == 0) return;
+    await db.accounts(_c!).doc(id.toString()).set(
+        {'balance': FieldValue.increment(delta)}, SetOptions(merge: true));
+  }
+
   Future<void> saveTransaction(TxItem t) async {
     if (_c == null) return;
+    // K2: hujjat kaliti = auto-ID (receipts kabi). Ilgari `doc(t.id)` edi —
+    // ikki qurilma bir xil lokal `id` hisoblab bitta hujjatni ustma-ust
+    // yozardi va bitta savdo moliya jurnalidan yo'qolardi. Endi har yozuv
+    // o'z docId'siga tushadi.
+    final ref = t.docId != null ? db.transactions(_c!).doc(t.docId) : db.transactions(_c!).doc();
+    t.docId = ref.id;
     // createdAt — vaqt bo'yicha moliyaviy hisobotlar/agregatsiya uchun (§4).
-    await db.transactions(_c!).doc(t.id.toString()).set(
+    await ref.set(
       {...txToMap(t), 'createdAt': FieldValue.serverTimestamp()},
       SetOptions(merge: true),
     );
@@ -289,10 +416,40 @@ class FirestoreRepository {
 
   Future<void> saveReceipt(Receipt r) async {
     if (_c == null) return;
-    await db.receipts(_c!).doc(r.id.toString()).set(
+    // Yangi cheklar auto-ID bilan yoziladi; eski (migratsiyagacha) cheklarda
+    // docId listener'dan raqamli string bo'lib keladi — ikkalasi ham shu yo'ldan.
+    final ref = r.docId != null ? db.receipts(_c!).doc(r.docId) : db.receipts(_c!).doc();
+    r.docId = ref.id;
+    await ref.set(
       {...receiptToMap(r), 'createdAt': FieldValue.serverTimestamp()},
       SetOptions(merge: true),
     );
+  }
+
+  // ─────────────────────────── Ochiq cheklar (openChecks) ───────────────────────────
+
+  /// Yangi ochiq chek uchun Firestore auto-ID (lokal, tarmoqsiz yaratiladi).
+  String? newOpenCheckId() => _c == null ? null : db.openChecks(_c!).doc().id;
+
+  /// Ochiq chekni to'liq yozish (write-through, debounce KassaController'da).
+  /// `set` merge'siz — pozitsiya o'chirilgani ham aks etsin.
+  Future<void> saveOpenCheckRaw(String docId, Map<String, dynamic> data) async {
+    if (_c == null) return;
+    await db.openChecks(_c!).doc(docId)
+        .set({...data, 'updatedAt': FieldValue.serverTimestamp()});
+  }
+
+  /// To'langan / bekor qilingan chekni o'chirish.
+  Future<void> deleteOpenCheck(String docId) async {
+    if (_c == null) return;
+    await db.openChecks(_c!).doc(docId).delete();
+  }
+
+  /// «Закрыть без оплаты» audit izi (№5) — o'zgarmas jurnal, auto-ID.
+  /// Rules faqat create'ga ruxsat beradi: kassir yozadi, hech kim o'zgartirmaydi.
+  Future<void> saveVoidedCheck(Map<String, dynamic> data) async {
+    if (_c == null) return;
+    await db.voidedChecks(_c!).add({...data, 'voidedAt': FieldValue.serverTimestamp()});
   }
 
   Future<void> saveSupply(Supply s) async {
@@ -374,6 +531,46 @@ class FirestoreRepository {
         {...p, 'createdAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
   }
 
+  /// Kassa smenasi (id maydoni bilan) — doc id = id. Ochish va yopishda yoziladi.
+  /// (HOLAT-17: xposterwin bilan bir xil.)
+  Future<void> saveShiftRaw(Map<String, dynamic> s) async {
+    if (_c == null) return;
+    await db.shifts(_c!).doc(s['id'].toString()).set(s, SetOptions(merge: true));
+  }
+
+  /// Har sotuvda ochiq smena ko'rsatkichlarini oshirish.
+  /// `increment` ishlatiladi (absolyut qiymat emas) — bir smenada ikki kassa
+  /// bir vaqtda sotsa ham hech bir chek yo'qolmaydi (last-write-wins bo'lmaydi).
+  Future<void> addShiftSale(
+    int shiftId, {
+    required int revenue,
+    required int profit,
+    required int cash,
+    required int card,
+    required int bonus,
+    required int debt,
+  }) async {
+    if (_c == null) return;
+    await db.shifts(_c!).doc(shiftId.toString()).set({
+      'revenue': FieldValue.increment(revenue),
+      'profit': FieldValue.increment(profit),
+      'checks': FieldValue.increment(1),
+      'cash': FieldValue.increment(cash),
+      'card': FieldValue.increment(card),
+      'bonus': FieldValue.increment(bonus),
+      'debt': FieldValue.increment(debt),
+    }, SetOptions(merge: true));
+  }
+
+  /// Qarz naqd qaytarilganda — ochiq smenaning naqd kirimi (increment).
+  Future<void> addShiftDebtRepaid(int shiftId, int amount) async {
+    if (_c == null) return;
+    await db.shifts(_c!).doc(shiftId.toString()).set(
+      {'debtRepaid': FieldValue.increment(amount)},
+      SetOptions(merge: true),
+    );
+  }
+
   /// Inventarizatsiya (id maydoni bilan) — doc id = id.
   Future<void> saveInventoryRaw(Map<String, dynamic> inv) async {
     if (_c == null) return;
@@ -401,6 +598,9 @@ class FirestoreRepository {
   }) async {
     if (_c == null) return;
     final callable = _fns.httpsCallable('createEmployee');
+    // PIN serverga OCHIQ MATNDA YUBORILMAYDI — client hash'lab beradi
+    // (functions/index.js pinHash/pinSalt ni hujjatga yozadi, pin: '').
+    final salt = pin.isEmpty ? null : newPinSalt();
     await callable.call({
       'cafeId': _c,
       'login': login,
@@ -408,7 +608,8 @@ class FirestoreRepository {
       'name': name,
       'role': role,
       'phone': phone,
-      'pin': pin,
+      'pinSalt': salt,
+      'pinHash': salt == null ? null : hashPin(salt, pin),
     });
   }
 
@@ -422,6 +623,14 @@ class FirestoreRepository {
   Future<void> deleteEmployee(String uid) async {
     final callable = _fns.httpsCallable('deleteEmployee');
     await callable.call({'cafeId': _c, 'uid': uid});
+  }
+
+  /// Foydalanuvchi O'Z akkauntini va barcha ma'lumotini o'chiradi
+  /// (Google Play "Account deletion" talabi). Owner → butun kafe(lar);
+  /// xodim → faqat o'zi. cafeId server tomonda uid orqali aniqlanadi.
+  Future<void> deleteAccount() async {
+    final callable = _fns.httpsCallable('deleteAccount');
+    await callable.call(<String, dynamic>{});
   }
 
   // ─────────────────────────── Provisioning (yangi owner) ───────────────────────────
@@ -496,10 +705,12 @@ class FirestoreRepository {
       subscriptionStatus: 'trial',
     )));
     // Owner ham employees ichida (POS PIN almashinuvi uchun) — har cafeda o'z uid'i bilan.
-    await db.employees(cafeId).doc(uid).set(employeeToMap(Employee(
-      id: 1, name: ownerName, role: Roles.owner, pin: ownerPin, phone: '',
+    // PIN darhol hash'lanadi (HOLAT-16).
+    final ownerEmp = Employee(
+      id: 1, name: ownerName, role: Roles.owner, pin: '', phone: '',
       login: email, uid: uid, active: true,
-    )));
+    )..setPin(ownerPin);
+    await db.employees(cafeId).doc(uid).set(employeeToMap(ownerEmp));
     // Standart hisoblar / guruhlar / sklad.
     final batch = db.fs.batch();
     batch.set(db.accounts(cafeId).doc('1'),
@@ -534,78 +745,82 @@ class FirestoreRepository {
 
   // ─────────────────────────── §5: atomik to'lov (transaction) ───────────────────────────
 
-  /// completePayment ni Firestore transaction bilan atomik qiladi (§5):
-  /// receipt + account.balance + employee stats + client bonus + ingredient stock.
-  /// (Hosila statistika §4 — Cloud Function `dailyAggregate` bilan.)
+  /// To'lovni Firestore'ga ATOMIK yozadi (§5):
+  /// receipt + account.balance + employee stats + client bonus/qarz + ingredient stock.
+  ///
+  /// `runTransaction` EMAS, `WriteBatch` + `FieldValue.increment` ishlatiladi:
+  ///   • **Oflayn ishlaydi** — `runTransaction` serverni talab qiladi, internet
+  ///     uzilganda savdo umuman yozilmasdan qolardi (faqat chek fallback'da saqlanardi).
+  ///   • Windows POS (xposterwin) bilan bir xil kod yo'li — u yerda `runTransaction`
+  ///     Flutter engine'ini qulatadi (platform-kanal thread-safe emas).
+  ///   • Delta yozuv (`increment`) ikki qurilma bir vaqtda sotganda ham to'g'ri
+  ///     yig'iladi; absolyut qiymatda oxirgi yozuv oldingisini yeb qo'yardi.
+  ///
+  /// Hujjat mavjudligini `app` ro'yxatlaridan bilamiz — `set(merge:true)` bo'sh
+  /// hujjat yaratib qo'ymaydi.
   Future<void> completePayment({
     required Receipt receipt,
     required int cashAmount,
+    int cardAmount = 0,
     String? employeeUid,
     int? clientId,
     int bonusSpent = 0,
     int bonusEarned = 0,
+    int debtAdded = 0,
     List<({int ingredientId, double amount})> stockDeltas = const [],
   }) async {
     if (_c == null) return;
     final c = _c!;
-    // MUHIM: Firestore tranzaksiyasida BARCHA o'qishlar yozuvlardan OLDIN
-    // bo'lishi shart — aks holda butun tranzaksiya bekor bo'ladi (assert).
-    await db.fs.runTransaction((tx) async {
-      // ── 1-bosqich: o'qishlar ──
-      final cashRef = db.accounts(c).doc('1'); // Денежный ящик (seed id=1)
-      DocumentSnapshot<Map<String, dynamic>>? cashSnap;
-      if (cashAmount != 0) cashSnap = await tx.get(cashRef);
+    final batch = db.fs.batch();
 
-      final eRef = employeeUid != null ? db.employees(c).doc(employeeUid) : null;
-      DocumentSnapshot<Map<String, dynamic>>? eSnap;
-      if (eRef != null) eSnap = await tx.get(eRef);
+    // Receipt — AUTO-ID hujjat. Avval doc kaliti `receipt.id` edi: ikki qurilma
+    // bir vaqtda sotsa ikkalasi ham `receipts/{N}` ga yozib, bitta TO'LANGAN
+    // savdo yo'qolardi. Endi kalit auto-ID, `id` esa faqat ko'rsatiladigan raqam.
+    final rRef = receipt.docId != null
+        ? db.receipts(c).doc(receipt.docId)
+        : db.receipts(c).doc();
+    receipt.docId = rRef.id;
+    batch.set(rRef, {...receiptToMap(receipt), 'createdAt': FieldValue.serverTimestamp()});
 
-      final cliRef = clientId != null ? db.clients(c).doc(clientId.toString()) : null;
-      DocumentSnapshot<Map<String, dynamic>>? cliSnap;
-      if (cliRef != null) cliSnap = await tx.get(cliRef);
+    // Mavjudlik tekshiruvi shart: hujjat yo'q bo'lsa `merge` uni faqat
+    // `{balance: N}` bilan yaratardi va `accountFromMap` listener ichida qulardi.
+    if (cashAmount != 0 && app.accounts.any((a) => a.id == 1)) {
+      batch.set(db.accounts(c).doc('1'),
+          {'balance': FieldValue.increment(cashAmount)}, SetOptions(merge: true));
+    }
+    // O-1: karta (безнал) savdosi bank hisobi balansiga tushsin (ilgari faqat
+    // naqd yozilardi — «Счета»da bank qoldig'i 0 turib, jurnal bilan zid edi).
+    if (cardAmount != 0) {
+      final bank = app.accounts.where((a) => a.type == 'Безналичный счет').toList();
+      if (bank.isNotEmpty) {
+        batch.set(db.accounts(c).doc(bank.first.id.toString()),
+            {'balance': FieldValue.increment(cardAmount)}, SetOptions(merge: true));
+      }
+    }
 
-      final iRefs = <({DocumentReference<Map<String, dynamic>> ref, double amount})>[];
-      final iSnaps = <DocumentSnapshot<Map<String, dynamic>>>[];
-      for (final d in stockDeltas) {
-        final ref = db.ingredients(c).doc(d.ingredientId.toString());
-        iRefs.add((ref: ref, amount: d.amount));
-        iSnaps.add(await tx.get(ref));
-      }
+    if (employeeUid != null && app.employees.any((e) => e.uid == employeeUid)) {
+      batch.set(db.employees(c).doc(employeeUid), {
+        'revenue': FieldValue.increment(receipt.sum),
+        'checks': FieldValue.increment(1),
+      }, SetOptions(merge: true));
+    }
 
-      // ── 2-bosqich: yozuvlar ──
-      // Receipt (createdAt — §4 kunlik agregatsiya uchun)
-      tx.set(db.receipts(c).doc(receipt.id.toString()),
-          {...receiptToMap(receipt), 'createdAt': FieldValue.serverTimestamp()});
-      // Kassa (Денежный ящик) balansi
-      if (cashSnap != null) {
-        final bal = (cashSnap.data()?['balance'] as num?)?.toInt() ?? 0;
-        tx.update(cashRef, {'balance': bal + cashAmount});
-      }
-      // Xodim (kassir) statistikasi
-      if (eSnap != null && eSnap.exists) {
-        tx.update(eRef!, {
-          'revenue': ((eSnap.data()?['revenue'] as num?)?.toInt() ?? 0) + receipt.sum,
-          'checks': ((eSnap.data()?['checks'] as num?)?.toInt() ?? 0) + 1,
-        });
-      }
-      // Mijoz bonus/totalSpent
-      if (cliSnap != null && cliSnap.exists) {
-        final bonus = (cliSnap.data()?['bonus'] as num?)?.toInt() ?? 0;
-        final spent = (cliSnap.data()?['totalSpent'] as num?)?.toInt() ?? 0;
-        tx.update(cliRef!, {
-          'bonus': bonus - bonusSpent + bonusEarned,
-          'totalSpent': spent + receipt.sum,
-        });
-      }
-      // Ingredient qoldig'i (retsept bo'yicha)
-      for (var i = 0; i < iRefs.length; i++) {
-        final snap = iSnaps[i];
-        if (snap.exists) {
-          final st = (snap.data()?['stock'] as num?)?.toDouble() ?? 0;
-          final v = st - iRefs[i].amount;
-          tx.update(iRefs[i].ref, {'stock': v < 0 ? 0 : v});
-        }
-      }
-    });
+    if (clientId != null && app.clients.any((x) => x.id == clientId)) {
+      final bonusDelta = bonusEarned - bonusSpent;
+      batch.set(db.clients(c).doc(clientId.toString()), {
+        'totalSpent': FieldValue.increment(receipt.sum),
+        if (bonusDelta != 0) 'bonus': FieldValue.increment(bonusDelta),
+        if (debtAdded != 0) 'debt': FieldValue.increment(debtAdded),
+      }, SetOptions(merge: true));
+    }
+
+    // Manfiy qoldiq nolga qirqilmaydi — yetishmovchilikni ko'rsatadi.
+    for (final d in stockDeltas) {
+      if (!app.ingredients.any((i) => i.id == d.ingredientId)) continue;
+      batch.set(db.ingredients(c).doc(d.ingredientId.toString()),
+          {'stock': FieldValue.increment(-d.amount)}, SetOptions(merge: true));
+    }
+
+    await batch.commit();
   }
 }
