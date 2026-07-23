@@ -110,6 +110,7 @@
     <h2>Xposter <span>· Superadmin</span></h2>
     <div class="sp"></div>
     <div class="who" id="who"></div>
+    <button class="lo" id="testsBtn" style="margin-right:8px">🧪 Тесты</button>
     <button class="lo" id="logoutBtn">Выйти</button>
   </header>
   <div class="wrap">
@@ -127,6 +128,19 @@
     <div><div style="font-weight:700;font-size:15px" id="dName"></div><div style="color:var(--muted);font-size:12px" id="dCity"></div></div>
   </div>
   <div class="dwrap" id="dBody"></div>
+</div>
+
+<!-- ── TEST CENTER ── -->
+<div id="tests" class="hidden">
+  <div class="dhead">
+    <button class="back" id="testsBack">← Назад</button>
+    <div style="font-weight:700;font-size:15px">🧪 Центр тестирования</div>
+    <div style="flex:1"></div>
+    <button class="lo" id="runBtn" style="width:auto;margin:0;background:var(--accent);color:#fff;border-color:var(--accent)">Запустить все тесты</button>
+  </div>
+  <div class="dwrap" id="testsBody">
+    <div class="empty">Нажмите «Запустить все тесты».<br>Проверяются: инфраструктура, целостность данных всех заведений, подписки/блокировки, интеграционный поток (создание → продажа → возврат → проверка → очистка) и модель ролей.</div>
+  </div>
 </div>
 
 <script type="module">
@@ -206,6 +220,44 @@ function show(which){
   $("login").classList.toggle("hidden", which!=="login");
   $("app").classList.toggle("hidden", which!=="app");
   $("detail").classList.add("hidden");
+  $("tests").classList.add("hidden");
+}
+// ── TEST CENTER ──
+$("testsBtn").onclick = ()=> $("tests").classList.remove("hidden");
+$("testsBack").onclick = ()=> $("tests").classList.add("hidden");
+$("runBtn").onclick = runTests;
+async function runTests(){
+  const btn=$("runBtn"); btn.disabled=true; btn.innerHTML='<span class="spin"></span>';
+  $("testsBody").innerHTML='<div class="empty"><span class="spin"></span> Выполняется… (интеграционный поток создаёт и удаляет тест-заведение)</div>';
+  try{
+    const r=(await httpsCallable(fns,"superAdminRunTests")()).data;
+    renderTests(r);
+  }catch(e){ $("testsBody").innerHTML=`<div class="empty">Ошибка: ${esc(mapErr(e))}</div>`; }
+  btn.disabled=false; btn.textContent="Запустить снова";
+}
+function renderTests(r){
+  const groups={};
+  (r.results||[]).forEach(t=>{ (groups[t.group]=groups[t.group]||[]).push(t); });
+  const s=r.summary||{total:0,pass:0,fail:0};
+  let html=`<div class="stats">
+    <div class="stat"><div class="n">${s.total}</div><div class="l">Всего проверок</div></div>
+    <div class="stat ok"><div class="n">${s.pass}</div><div class="l">Пройдено</div></div>
+    <div class="stat ${s.fail?'bad':''}"><div class="n">${s.fail}</div><div class="l">Ошибок</div></div>
+    <div class="stat"><div class="n">${r.ms||0}<span style="font-size:13px"> мс</span></div><div class="l">Время</div></div>
+  </div>`;
+  for(const g of Object.keys(groups)){
+    html+=`<h3 style="color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin:18px 0 10px">${esc(g)}</h3>`;
+    html+=groups[g].map(t=>{
+      const c=t.status==="pass"?"var(--ok)":t.status==="warn"?"var(--warn)":"var(--bad)";
+      const ic=t.status==="pass"?"✓":t.status==="warn"?"!":"✕";
+      return `<div style="display:flex;gap:12px;align-items:flex-start;background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:11px 14px;margin-bottom:7px">
+        <div style="width:22px;height:22px;border-radius:50%;flex-shrink:0;background:${c};color:#141312;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px">${ic}</div>
+        <div style="flex:1"><div style="font-weight:600;font-size:13.5px">${esc(t.name)}</div>
+        ${t.detail?`<div style="color:var(--muted);font-size:12.5px;margin-top:3px;word-break:break-word">${esc(t.detail)}</div>`:""}</div>
+      </div>`;
+    }).join("");
+  }
+  $("testsBody").innerHTML=html;
 }
 
 // ── DASHBOARD ──

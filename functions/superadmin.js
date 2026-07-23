@@ -81,6 +81,8 @@ exports.superAdminList = onCall(async (request) => {
   const out = [];
   for (const c of cafes.docs) {
     const d = c.data();
+    // Test markazi efemer kafelarini dashboardда ko'rsatmaymiz.
+    if (String(d.name || "").startsWith("__SELFTEST")) continue;
     const owner = await ownerInfo(c.id, d.ownerUid);
     const [clients, products, employees] = await Promise.all([
       countOf(`cafes/${c.id}/clients`),

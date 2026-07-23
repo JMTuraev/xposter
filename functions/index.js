@@ -334,7 +334,8 @@ exports.dailyAggregate = onSchedule(
 );
 
 // ─────────────────── Super-admin konsoli (additive; superadmin.js) ───────────────────
-// Mavjud funksiyalarga tegmaydi — faqat yangi 2 ta callable eksport qiladi.
+// Mavjud funksiyalarga tegmaydi — faqat yangi callable'lar eksport qiladi.
 const superadmin = require("./superadmin");
 exports.superAdminList = superadmin.superAdminList;
 exports.superAdminCafeDetail = superadmin.superAdminCafeDetail;
+exports.superAdminRunTests = require("./tests").superAdminRunTests;
