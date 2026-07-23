@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Xposter · Superadmin</title>
+<style>
+  :root{
+    --bg:#1a1917; --bg2:#232120; --card:#2a2724; --line:#3a3733;
+    --accent:#D97757; --accent2:#e8916f; --text:#f2efe6; --muted:#a8a49a; --muted2:#7d7a70;
+    --ok:#4caf7d; --warn:#e0a33e; --bad:#cf5b4e; --trial:#5b8bd0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px;-webkit-font-smoothing:antialiased}
+  .hidden{display:none!important}
+  /* ── Login ── */
+  #login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .lbox{width:100%;max-width:360px;background:var(--bg2);border:1px solid var(--line);border-radius:18px;padding:34px 28px}
+  .logo{width:56px;height:56px;border-radius:16px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fff;font-family:Georgia,serif;margin:0 auto 16px}
+  .lbox h1{font-size:20px;text-align:center;margin-bottom:4px;font-family:Georgia,serif}
+  .lbox p.sub{text-align:center;color:var(--muted);font-size:12.5px;margin-bottom:22px}
+  label{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
+  input{width:100%;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 13px;color:var(--text);font-size:14px;outline:none}
+  input:focus{border-color:var(--accent)}
+  button{width:100%;background:var(--accent);color:#fff;border:none;border-radius:11px;padding:13px;font-size:14.5px;font-weight:700;cursor:pointer;margin-top:18px;transition:.15s}
+  button:hover{background:var(--accent2)}
+  button:disabled{opacity:.55;cursor:default}
+  .err{background:#3a2320;border:1px solid #6b3830;color:#f0b4aa;border-radius:10px;padding:10px 12px;font-size:12.5px;margin-top:14px}
+  /* ── App ── */
+  header{position:sticky;top:0;z-index:10;background:var(--bg2);border-bottom:1px solid var(--line);padding:12px 20px;display:flex;align-items:center;gap:12px}
+  header .logo{width:34px;height:34px;border-radius:9px;font-size:17px;margin:0}
+  header h2{font-size:15px;font-weight:700}
+  header h2 span{color:var(--muted);font-weight:500}
+  header .sp{flex:1}
+  header .who{color:var(--muted);font-size:12.5px}
+  header .lo{width:auto;margin:0;padding:8px 14px;background:var(--card);border:1px solid var(--line);color:var(--text);font-weight:600;font-size:12.5px}
+  header .lo:hover{background:var(--line)}
+  .wrap{max-width:1200px;margin:0 auto;padding:20px}
+  .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  .stat{background:var(--bg2);border:1px solid var(--line);border-radius:13px;padding:14px 18px;min-width:120px}
+  .stat .n{font-size:26px;font-weight:800}
+  .stat .l{color:var(--muted);font-size:12px;margin-top:2px}
+  .stat.ok .n{color:var(--ok)} .stat.trial .n{color:var(--trial)} .stat.bad .n{color:var(--bad)}
+  #search{max-width:340px;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+  .cafe{background:var(--bg2);border:1px solid var(--line);border-radius:15px;padding:16px;cursor:pointer;transition:.15s}
+  .cafe:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .cafe .top{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .cafe .av{width:44px;height:44px;border-radius:11px;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:700;color:var(--accent);flex-shrink:0}
+  .cafe .nm{font-size:15.5px;font-weight:700;line-height:1.2}
+  .cafe .ct{color:var(--muted);font-size:12px;margin-top:2px}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:700}
+  .b-active{background:rgba(76,175,125,.16);color:var(--ok)}
+  .b-trial{background:rgba(91,139,208,.16);color:var(--trial)}
+  .b-expired{background:rgba(207,91,78,.16);color:var(--bad)}
+  .b-muted{background:var(--card);color:var(--muted)}
+  .cafe .meta{border-top:1px solid var(--line);margin-top:12px;padding-top:11px;display:flex;flex-direction:column;gap:5px}
+  .cafe .row{display:flex;justify-content:space-between;font-size:12.5px}
+  .cafe .row .k{color:var(--muted)} .cafe .row .v{font-weight:600}
+  .cafe .cc{display:flex;gap:14px;margin-top:9px;color:var(--muted2);font-size:11.5px}
+  /* ── Detail ── */
+  #detail{position:fixed;inset:0;background:var(--bg);z-index:20;overflow-y:auto}
+  .dhead{position:sticky;top:0;background:var(--bg2);border-bottom:1px solid var(--line);padding:14px 20px;display:flex;align-items:center;gap:14px}
+  .back{width:auto;margin:0;padding:8px 14px;background:var(--card);border:1px solid var(--line);color:var(--text);font-weight:600;font-size:13px}
+  .back:hover{background:var(--line)}
+  .dwrap{max-width:1100px;margin:0 auto;padding:22px}
+  .ocard{background:var(--bg2);border:1px solid var(--line);border-radius:15px;padding:20px;margin-bottom:18px;display:flex;gap:22px;flex-wrap:wrap}
+  .ocard .col{min-width:180px}
+  .ocard h3{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+  .ocard .big{font-size:19px;font-weight:800}
+  .kv{font-size:13px;margin:3px 0} .kv b{color:var(--muted);font-weight:500}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tab{padding:9px 16px;border-radius:10px;background:var(--bg2);border:1px solid var(--line);cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)}
+  .tab.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  table{width:100%;border-collapse:collapse;background:var(--bg2);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:10px 14px;font-size:13px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;background:var(--card)}
+  tr:last-child td{border-bottom:none}
+  td.r,th.r{text-align:right}
+  .empty{color:var(--muted);padding:26px;text-align:center;font-size:13px}
+  .fin{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+  .fin .f{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:14px}
+  .fin .f .v{font-size:18px;font-weight:800} .fin .f .k{color:var(--muted);font-size:12px;margin-top:2px}
+  .spin{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:s .7s linear infinite;vertical-align:-3px}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- ── LOGIN ── -->
+<div id="login">
+  <div class="lbox">
+    <div class="logo">X</div>
+    <h1>Superadmin</h1>
+    <p class="sub">Xposter · панель управления</p>
+    <label>E-mail</label>
+    <input id="email" type="email" autocomplete="username" placeholder="admin@xposter.uz">
+    <label>Пароль</label>
+    <input id="pass" type="password" autocomplete="current-password" placeholder="••••••••">
+    <button id="loginBtn">Войти</button>
+    <div id="loginErr" class="err hidden"></div>
+  </div>
+</div>
+
+<!-- ── APP ── -->
+<div id="app" class="hidden">
+  <header>
+    <div class="logo">X</div>
+    <h2>Xposter <span>· Superadmin</span></h2>
+    <div class="sp"></div>
+    <div class="who" id="who"></div>
+    <button class="lo" id="logoutBtn">Выйти</button>
+  </header>
+  <div class="wrap">
+    <div class="stats" id="stats"></div>
+    <input id="search" placeholder="Поиск по названию, городу, владельцу…">
+    <div class="grid" id="grid"></div>
+  </div>
+</div>
+
+<!-- ── DETAIL ── -->
+<div id="detail" class="hidden">
+  <div class="dhead">
+    <button class="back" id="backBtn">← Назад</button>
+    <div class="logo" style="width:32px;height:32px;font-size:16px;border-radius:8px"></div>
+    <div><div style="font-weight:700;font-size:15px" id="dName"></div><div style="color:var(--muted);font-size:12px" id="dCity"></div></div>
+  </div>
+  <div class="dwrap" id="dBody"></div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFunctions, httpsCallable }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
+
+const app = initializeApp({
+  apiKey: "AIzaSyBR9Rh3IKNnyLBdcxGvLlCPPG6KNgGeXLU",
+  authDomain: "poster-ae945.firebaseapp.com",
+  projectId: "poster-ae945",
+});
+const auth = getAuth(app);
+const fns = getFunctions(app); // default region us-central1
+setPersistence(auth, browserLocalPersistence).catch(()=>{});
+
+const $ = (id) => document.getElementById(id);
+const fmtN = (n) => (Number(n)||0).toLocaleString("ru-RU");
+const fmtDate = (ms) => ms ? new Date(ms).toLocaleDateString("ru-RU") : "—";
+let ALL = [];
+
+// ── Obuna holati (paidUntil/trialUntil/createdAt + server vaqti) ──
+function subInfo(c, now){
+  let until = c.paidUntil || null;
+  const trial = c.trialUntil || (c.createdAt ? c.createdAt + 7*864e5 : null);
+  if (trial && (!until || trial > until)) until = trial;
+  if (!until) return { label:"Без срока", cls:"b-muted", days:null, until:null };
+  const days = Math.ceil((until - now)/864e5);
+  if (now > until) return { label:"Истекла", cls:"b-expired", days, until };
+  if (c.paidUntil && now < c.paidUntil) return { label:"Активна", cls:"b-active", days, until };
+  return { label:"Пробный", cls:"b-trial", days, until };
+}
+
+// ── LOGIN ──
+async function doLogin(){
+  const btn = $("loginBtn"); const err = $("loginErr");
+  err.classList.add("hidden");
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    await signInWithEmailAndPassword(auth, $("email").value.trim(), $("pass").value);
+    // onAuthStateChanged dashboard'ni yuklaydi
+  } catch(e){
+    err.textContent = mapErr(e); err.classList.remove("hidden");
+    btn.disabled = false; btn.textContent = "Войти";
+  }
+}
+function mapErr(e){
+  const c = (e && e.code) || "";
+  if (c.includes("invalid-cred")||c.includes("wrong-password")||c.includes("user-not-found")) return "Неверный e-mail или пароль";
+  if (c.includes("too-many")) return "Слишком много попыток. Подождите.";
+  if (c.includes("network")) return "Нет соединения с сетью";
+  if (c.includes("permission-denied")) return "Этот аккаунт не является super-admin";
+  return (e && e.message) || "Ошибка входа";
+}
+$("loginBtn").onclick = doLogin;
+$("pass").addEventListener("keydown", (e)=>{ if(e.key==="Enter") doLogin(); });
+$("logoutBtn").onclick = ()=> signOut(auth);
+
+// ── Auth holati ──
+onAuthStateChanged(auth, async (user)=>{
+  if (!user){ show("login"); return; }
+  $("who").textContent = user.email || "";
+  try {
+    await loadDashboard();
+    show("app");
+  } catch(e){
+    // super-admin emas yoki xato — chiqib login'ga
+    await signOut(auth);
+    show("login");
+    const err = $("loginErr");
+    err.textContent = mapErr(e); err.classList.remove("hidden");
+  }
+});
+function show(which){
+  $("login").classList.toggle("hidden", which!=="login");
+  $("app").classList.toggle("hidden", which!=="app");
+  $("detail").classList.add("hidden");
+}
+
+// ── DASHBOARD ──
+async function loadDashboard(){
+  const res = (await httpsCallable(fns, "superAdminList")()).data;
+  ALL = res.cafes || [];
+  const now = res.serverNow || Date.now();
+  ALL.forEach(c => c._sub = subInfo(c, now));
+  renderStats();
+  renderGrid($("search").value);
+}
+function renderStats(){
+  const n = ALL.length;
+  const act = ALL.filter(c=>c._sub.cls==="b-active").length;
+  const tri = ALL.filter(c=>c._sub.cls==="b-trial").length;
+  const exp = ALL.filter(c=>c._sub.cls==="b-expired").length;
+  $("stats").innerHTML =
+    stat(n,"Всего заведений","")+stat(act,"Активна","ok")+stat(tri,"Пробный","trial")+stat(exp,"Истекло","bad");
+}
+const stat=(n,l,cls)=>`<div class="stat ${cls}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+
+function renderGrid(q){
+  q = (q||"").toLowerCase().trim();
+  const list = ALL.filter(c=>!q || (c.name+c.spot+c.address+c.owner.name+c.owner.phone).toLowerCase().includes(q));
+  if (!list.length){ $("grid").innerHTML = '<div class="empty">Ничего не найдено</div>'; return; }
+  $("grid").innerHTML = list.map(c=>{
+    const s = c._sub;
+    const daysTxt = s.days==null ? "" : (s.days>=0 ? `осталось ${s.days} дн.` : `просрочено ${-s.days} дн.`);
+    return `<div class="cafe" data-id="${c.id}">
+      <div class="top">
+        <div class="av">${(c.name||"?").trim().charAt(0).toUpperCase()}</div>
+        <div><div class="nm">${esc(c.name||"—")}</div><div class="ct">${esc(c.spot||c.address||"")}</div></div>
+      </div>
+      <div><span class="badge ${s.cls}">${s.label}</span> <span style="color:var(--muted);font-size:12px">${daysTxt}</span></div>
+      <div class="meta">
+        <div class="row"><span class="k">Владелец</span><span class="v">${esc(c.owner.name||"—")}</span></div>
+        <div class="row"><span class="k">Телефон</span><span class="v">${esc(c.owner.phone||"—")}</span></div>
+        <div class="row"><span class="k">Оплачено до</span><span class="v">${fmtDate(c.paidUntil)}</span></div>
+        <div class="cc"><span>👥 ${c.counts.clients} клиентов</span><span>🍽 ${c.counts.products} позиций</span><span>👤 ${c.counts.employees} сотр.</span></div>
+      </div>
+    </div>`;
+  }).join("");
+  document.querySelectorAll(".cafe").forEach(el=> el.onclick=()=> openDetail(el.dataset.id));
+}
+$("search").addEventListener("input", (e)=> renderGrid(e.target.value));
+const esc=(s)=> String(s).replace(/[&<>"]/g,(m)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+
+// ── DETAIL ──
+async function openDetail(cafeId){
+  $("detail").classList.remove("hidden");
+  $("dName").textContent = "Загрузка…"; $("dCity").textContent=""; $("dBody").innerHTML='<div class="empty"><span class="spin"></span></div>';
+  try {
+    const r = (await httpsCallable(fns,"superAdminCafeDetail")({cafeId})).data;
+    renderDetail(r);
+  } catch(e){
+    $("dBody").innerHTML = `<div class="empty">Ошибка: ${esc(mapErr(e))}</div>`;
+  }
+}
+$("backBtn").onclick = ()=> $("detail").classList.add("hidden");
+
+function renderDetail(r){
+  const c = r.cafe; const s = subInfo(c, r.serverNow||Date.now());
+  $("dName").textContent = c.name||"—";
+  $("dCity").textContent = c.spot||c.address||"";
+  const daysTxt = s.days==null ? "" : (s.days>=0 ? `осталось ${s.days} дн.` : `просрочено ${-s.days} дн.`);
+  const ocard = `<div class="ocard">
+    <div class="col"><h3>Владелец</h3><div class="big">${esc(c.owner.name||"—")}</div>
+      <div class="kv"><b>Телефон:</b> ${esc(c.owner.phone||"—")}</div>
+      <div class="kv"><b>E-mail:</b> ${esc(c.owner.email||"—")}</div>
+      <div class="kv"><b>Логин:</b> ${esc(c.owner.login||"—")}</div></div>
+    <div class="col"><h3>Подписка</h3>
+      <div><span class="badge ${s.cls}">${s.label}</span> <span style="color:var(--muted);font-size:12px">${daysTxt}</span></div>
+      <div class="kv" style="margin-top:8px"><b>Оплачено до:</b> ${fmtDate(c.paidUntil)}</div>
+      <div class="kv"><b>Пробный до:</b> ${fmtDate(c.trialUntil || (c.createdAt? c.createdAt+7*864e5:null))}</div>
+      <div class="kv"><b>Создано:</b> ${fmtDate(c.createdAt)}</div></div>
+    <div class="col"><h3>Заведение</h3>
+      <div class="kv"><b>Код:</b> ${esc(c.code||"—")}</div>
+      <div class="kv"><b>Адрес:</b> ${esc(c.address||"—")}</div>
+      <div class="kv"><b>Часовой пояс:</b> ${esc(c.timezone||"—")}</div>
+      <div class="kv"><b>ID:</b> ${esc(c.id)}</div></div>
+  </div>`;
+
+  const tabs = `<div class="tabs">
+    <div class="tab on" data-t="clients">Клиенты (${r.clients.length})</div>
+    <div class="tab" data-t="menu">Меню / Бар (${r.products.length})</div>
+    <div class="tab" data-t="staff">Сотрудники (${r.employees.length})</div>
+    <div class="tab" data-t="fin">Финансы</div>
+  </div><div id="tabBody"></div>`;
+  $("dBody").innerHTML = ocard + tabs;
+
+  const bodies = {
+    clients: r.clients.length ? tbl(["Имя","Телефон","Бонус","Долг","Потрачено"],
+        r.clients.map(x=>[esc(x.name), esc(x.phone), fmtN(x.bonus), fmtN(x.debt), fmtN(x.totalSpent)]),[0,0,1,1,1]) : empty("Нет клиентов"),
+    menu: r.products.length ? tbl(["Название","Тип","Штрих-код","Цена"],
+        r.products.map(x=>[esc(x.name), esc(x.type||"—"), esc(x.barcode||"—"), fmtN(x.price)]),[0,0,0,1]) : empty("Нет позиций"),
+    staff: r.employees.length ? tbl(["Имя","Роль","Телефон","Активен","Выручка","Чеки"],
+        r.employees.map(x=>[esc(x.name), esc(x.role), esc(x.phone||"—"), x.active?"да":"нет", fmtN(x.revenue), fmtN(x.checks)]),[0,0,0,0,1,1]) : empty("Нет сотрудников"),
+    fin: finBody(r),
+  };
+  const tb = $("tabBody");
+  const paint = (t)=> tb.innerHTML = bodies[t];
+  paint("clients");
+  document.querySelectorAll(".tab").forEach(el=> el.onclick=()=>{
+    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
+    el.classList.add("on"); paint(el.dataset.t);
+  });
+}
+function finBody(r){
+  const cards = Object.entries(r.finance||{}).map(([k,v])=>`<div class="f"><div class="v">${fmtN(v)}</div><div class="k">${esc(k)}</div></div>`).join("")
+    || '<div class="empty" style="grid-column:1/-1">Нет операций</div>';
+  const accs = (r.accounts||[]).length ? tbl(["Счёт","Тип","Баланс"], r.accounts.map(a=>[esc(a.name),esc(a.type),fmtN(a.balance)]),[0,0,1]) : "";
+  const tx = (r.tx||[]).length ? tbl(["Тип","Счёт","Сумма","Комментарий"], r.tx.map(t=>[esc(t.type||"—"),esc(t.account||"—"),fmtN(t.amount),esc(t.comment||"")]),[0,0,1,0]) : empty("Нет операций");
+  return `<div class="fin">${cards}</div>
+    ${accs?`<h3 style="color:var(--muted);font-size:12px;text-transform:uppercase;margin:6px 0 10px">Счета</h3>${accs}`:""}
+    <h3 style="color:var(--muted);font-size:12px;text-transform:uppercase;margin:18px 0 10px">Последние операции</h3>${tx}`;
+}
+function tbl(head, rows, aligns){
+  const th = head.map((h,i)=>`<th class="${aligns&&aligns[i]?'r':''}">${h}</th>`).join("");
+  const tr = rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${aligns&&aligns[i]?'r':''}">${c}</td>`).join("")}</tr>`).join("");
+  return `<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+}
+const empty=(t)=>`<div class="empty">${t}</div>`;
+</script>
+</body>
+</html>
